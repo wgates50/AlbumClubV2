@@ -701,10 +701,90 @@ style={{ color: r?.score != null ? m.color : "var(--muted-2)" }}>
 
 /* ------------------------------ settings ------------------------------ */
 
-function ClubSettings({ clubName, members, me, albumCount, onChanged }: {
+/* Albums typed in by hand — or imported from the spreadsheet — have no sleeve.
+   This looks each one up in the same Apple catalogue the add-album search uses.
+   It only accepts a result whose artist agrees: a wrong sleeve is worse than
+   the gradient, and it would be silently wrong forever. */
+function ArtworkFinder({ albums, onChanged }: { albums: Album[]; onChanged: () => void }) {
+const missing = useMemo(() => albums.filter((a) => !a.artUrl), [albums]);
+const [busy, setBusy] = useState(false);
+const [note, setNote] = useState("");
+const [report, setReport] = useState<{ found: number; skipped: string[] } | null>(null);
+
+const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+const run = async () => {
+setBusy(true); setReport(null);
+let found = 0;
+const skipped: string[] = [];
+for (let i = 0; i < missing.length; i++) {
+const a = missing[i];
+setNote(`Looking up ${i + 1} of ${missing.length} — ${a.title}`);
+const res = await api(`/api/search?q=${encodeURIComponent(`${a.artist} ${a.title}`)}`);
+const results = ((res.data.results ?? []) as Result[]).filter((r) => r.artUrl);
+const want = norm(a.artist);
+const hit =
+results.find((r) => norm(r.artist) === want) ??
+results.find((r) => norm(r.artist).includes(want) || want.includes(norm(r.artist)));
+if (!hit) { skipped.push(`${a.title} — ${a.artist}`); continue; }
+const saved = await api("/api/albums", {
+method: "PATCH",
+body: JSON.stringify({
+id: a.id, artUrl: hit.artUrl,
+appleUrl: a.appleUrl ?? hit.appleUrl,
+year: a.year ?? hit.year,
+}),
+});
+if (saved.ok) found += 1; else skipped.push(`${a.title} — couldn't save`);
+await new Promise((r) => setTimeout(r, 300)); /* Apple rate-limits bursts */
+}
+setBusy(false); setNote("");
+setReport({ found, skipped });
+onChanged();
+};
+
+if (!albums.length) return null;
+
+return (
+<>
+<p className="eyebrow mt34 mb16">Artwork</p>
+{missing.length === 0 ? (
+<p className="muted">Every album has a sleeve.</p>
+) : (
+<>
+<p className="muted mb12">
+{missing.length} {missing.length === 1 ? "album has" : "albums have"} no sleeve and fall
+back to a gradient. This searches Apple&rsquo;s catalogue and fills in the ones it can
+match with confidence.
+</p>
+<button className="btn" disabled={busy} onClick={run}>
+{busy ? "Searching…" : `Find artwork for ${missing.length}`}
+</button>
+</>
+)}
+{note && <p className="muted mt8">{note}</p>}
+{report && (
+<div className="mt14">
+<p className="muted">
+Found {report.found} sleeve{report.found === 1 ? "" : "s"}.
+{report.skipped.length > 0 && ` ${report.skipped.length} couldn't be matched — add those by hand with Edit.`}
+</p>
+{report.skipped.length > 0 && (
+<ul className="art-missed">
+{report.skipped.map((t) => <li key={t}>{t}</li>)}
+</ul>
+)}
+</div>
+)}
+</>
+);
+}
+
+function ClubSettings({ clubName, members, me, albums, onChanged }: {
 clubName: string; members: Member[]; me: string | null;
-albumCount: number; onChanged: () => void;
+albums: Album[]; onChanged: () => void;
 }) {
+const albumCount = albums.length;
 const [name, setName] = useState(clubName);
 const [newMember, setNewMember] = useState("");
 const [editing, setEditing] = useState<string | null>(null);
@@ -780,6 +860,8 @@ onClick={() => { post({ name: newMember.trim() }); setNewMember(""); }}><Plus />
 </label>
 
 {error && <p className="error">{error}</p>}
+
+<ArtworkFinder albums={albums} onChanged={onChanged} />
 
 <p className="eyebrow mt34 mb16">This device</p>
 <div className="flex gap10 wrap">
@@ -1018,7 +1100,7 @@ me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al 
 {tab === "table" && <Leaderboard albums={state.albums} members={state.members} ratings={state.ratings} />}
 {tab === "club" && (
 <ClubSettings clubName={state.clubName} members={state.members} me={state.me}
-albumCount={state.albums.length} onChanged={load} />
+albums={state.albums} onChanged={load} />
 )}
 </main>
 
