@@ -166,20 +166,20 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   /* Both services offer a playlist pick. For Spotify it is optional extra on
      top of who you follow; for YouTube it is the only way to know anything,
      since it publishes no following list. Previous choices come back ticked. */
-  const openPicker = useCallback(async (service: Service) => {
+  const openPicker = useCallback(async (service: Service, savedIds: string[] = []) => {
     setError("");
     try {
       setBusy("Loading your playlists…");
       const lists = service === "youtube" ? await youtubePlaylists() : await spotifyPlaylists();
       const known = new Set(lists.map((l) => l.id));
-      setChosen(new Set((wire?.playlistIds ?? []).filter((id) => known.has(id))));
+      setChosen(new Set(savedIds.filter((id) => known.has(id))));
       setPlaylists(lists);
     } catch (err) {
       setError(humanError(err, "Couldn't load your playlists"));
     } finally {
       setBusy("");
     }
-  }, [wire]);
+  }, []);
 
   /* On mount: finish an OAuth return if that is why we are here, then load what
      is on file and refresh it once. */
@@ -203,7 +203,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
         await refreshReleases(w.artists, w.service);
       } else if (w.connected && !w.artists.length && w.service && !refreshed.current) {
         refreshed.current = true;
-        await openPicker(w.service);
+        await openPicker(w.service, w.playlistIds ?? []);
       } else {
         setBusy("");
       }
@@ -229,7 +229,9 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     await refreshReleases((w?.artists ?? []) as Tracked[], service);
   }, [load, refreshReleases]);
 
-  const rescan = useCallback(() => { void openPicker(wire?.service ?? "spotify"); }, [openPicker, wire]);
+  const rescan = useCallback(() => {
+    void openPicker(wire?.service ?? "spotify", wire?.playlistIds ?? []);
+  }, [openPicker, wire]);
 
   const scanPlaylists = useCallback(async (ids: string[]) => {
     const service = wire?.service ?? "spotify";
