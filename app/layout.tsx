@@ -1068,7 +1068,43 @@ label.field > span {
   .album-top { grid-template-columns: 1fr; }
   .sleeve { width: 210px; max-width: 100%; justify-self: start; }
   .brand { font-size: 21px; }
-  .tabs { order: 3; width: 100%; margin-left: 0; }
+  /* One scrolling row, not two stacked ones. The topbar is sticky, so a
+     wrapped nav would cost ~130px of every screen for as long as you use it. */
+  .tabs {
+    order: 3; width: 100%; margin-left: 0;
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    margin-inline: -16px; padding-inline: 16px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; scroll-snap-align: start; }
+  /* Safari zooms the whole page when you focus a field under 16px, and never
+     zooms back out — writing a review on a phone shouldn't do that. */
+  textarea,
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  select { font-size: 16px; }
+  .month-meta { gap: 10px; }
+  .month-meta .right { margin-left: 0; width: 100%; justify-content: center; }
+  .up-row-actions { padding-left: 0; }
+  .up-connect h2 { font-size: 32px; }
+}
+
+/* Touch input, whatever the screen width: the score slider is the thing people
+   actually come here to use, and a 16px thumb is too small to place a 7.4 with
+   a thumb. Widening the control also makes the whole strip grabbable. */
+@media (pointer: coarse) {
+  input[type="range"] { height: 36px; }
+  input[type="range"]::-webkit-slider-thumb {
+    width: 26px; height: 26px; margin-top: -12px;
+    box-shadow: 0 0 0 5px rgba(224, 178, 92, 0.18);
+  }
+  input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; }
+  .btn { min-height: 42px; }
+  .btn.sm { min-height: 36px; }
+  .track, .up-view, .up-filter { min-height: 36px; }
 }
 
 /* ---------------- utilities ---------------- */
