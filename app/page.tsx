@@ -14,7 +14,7 @@ ytmUrl: string | null; appleUrl: string | null; tracks: string[]; createdAt: str
 };
 type Rating = {
 albumId: string; memberId: string; score: number | null; review: string;
-favTracks: string[]; updatedAt: string;
+favTracks: string[]; skipped: boolean; updatedAt: string;
 };
 type State = {
 ok: true; mode: "live" | "preview"; me: string | null; members: Member[];
@@ -134,13 +134,16 @@ return (
 }
 
 function Take({ member, r }: { member: Member; r?: Rating }) {
-const empty = !r || (r.score === null && !r.review);
+const skipped = Boolean(r?.skipped);
+const empty = !skipped && (!r || (r.score === null && !r.review));
 return (
 <div className="take">
 <div className="take-head">
 <i className="pip" style={{ background: member.color }} />
 <span className="take-name">{member.name}</span>
-<span className="take-score" style={{ color: empty ? "var(--muted-2)" : member.color }}>{fmt(r?.score ?? null)}</span>
+{skipped
+? <span className="take-score dim">skipped</span>
+: <span className="take-score" style={{ color: empty ? "var(--muted-2)" : member.color }}>{fmt(r?.score ?? null)}</span>}
 </div>
 {empty ? (
 <p className="take-review dim">Hasn&rsquo;t weighed in yet.</p>
@@ -166,10 +169,11 @@ const mine = ratings.find((r) => r.albumId === album.id && r.memberId === me);
 const [score, setScore] = useState<number | null>(mine?.score ?? null);
 const [review, setReview] = useState(mine?.review ?? "");
 const [favs, setFavs] = useState<string[]>(mine?.favTracks ?? []);
+const [skipped, setSkipped] = useState(mine?.skipped ?? false);
 const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
 const [newTrack, setNewTrack] = useState("");
-const snapshot = (s: number | null, r: string, f: string[]) => JSON.stringify([s, r, f]);
-const lastSaved = useRef(snapshot(mine?.score ?? null, mine?.review ?? "", mine?.favTracks ?? []));
+const snapshot = (s: number | null, r: string, f: string[], k: boolean) => JSON.stringify([s, r, f, k]);
+const lastSaved = useRef(snapshot(mine?.score ?? null, mine?.review ?? "", mine?.favTracks ?? [], mine?.skipped ?? false));
 const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 useEffect(() => {
@@ -177,7 +181,8 @@ const r = ratings.find((x) => x.albumId === album.id && x.memberId === me);
 setScore(r?.score ?? null);
 setReview(r?.review ?? "");
 setFavs(r?.favTracks ?? []);
-lastSaved.current = snapshot(r?.score ?? null, r?.review ?? "", r?.favTracks ?? []);
+setSkipped(r?.skipped ?? false);
+lastSaved.current = snapshot(r?.score ?? null, r?.review ?? "", r?.favTracks ?? [], r?.skipped ?? false);
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [album.id, me]);
 
@@ -185,14 +190,14 @@ lastSaved.current = snapshot(r?.score ?? null, r?.review ?? "", r?.favTracks ?? 
 // what the server already holds, so simply opening the page saves nothing.
 useEffect(() => {
 if (!me) return;
-const payload = snapshot(score, review, favs);
+const payload = snapshot(score, review, favs, skipped);
 if (payload === lastSaved.current) return;
 setStatus("saving");
 if (timer.current) clearTimeout(timer.current);
 timer.current = setTimeout(async () => {
 const res = await api("/api/ratings", {
 method: "PUT",
-body: JSON.stringify({ albumId: album.id, score, review, favTracks: favs }),
+body: JSON.stringify({ albumId: album.id, score, review, favTracks: favs, skipped }),
 });
 if (res.ok) { lastSaved.current = payload; onChanged(); }
 setStatus(res.ok ? "saved" : "idle");
@@ -200,7 +205,7 @@ setTimeout(() => setStatus((s) => (s === "saved" ? "idle" : s)), 2200);
 }, 700);
 return () => { if (timer.current) clearTimeout(timer.current); };
 // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [score, review, favs]);
+}, [score, review, favs, skipped]);
 
 const stats = albumStats(album, ratings, members.length);
 const others = members.filter((m) => m.id !== me);
@@ -251,15 +256,24 @@ return (
 <>
 <div className="score-row">
 <div className={`big-score${score === null ? " unset" : ""}`}>
-{score === null ? "—" : score.toFixed(1)}<small>/10</small>
+{skipped ? "—" : score === null ? "—" : score.toFixed(1)}<small>{skipped ? "" : "/10"}</small>
 </div>
 <div className="grow">
-<input type="range" min={0} max={10} step={0.1} value={score ?? 5}
+<input type="range" min={0} max={10} step={0.1} value={score ?? 5} disabled={skipped}
 aria-label={`Your score for ${album.title}`}
 onChange={(e) => setScore(Number(e.target.value))} />
 <div className="ticks"><span>0</span><span>5</span><span>10</span></div>
-{score !== null && (
-<button className="btn ghost sm mt8" onClick={() => setScore(null)}>Clear score</button>
+<div className="flex gap8 mt8 wrap">
+{score !== null && !skipped && (
+<button className="btn ghost sm" onClick={() => setScore(null)}>Clear score</button>
+)}
+<button className={`btn ghost sm${skipped ? " on" : ""}`}
+onClick={() => { const next = !skipped; setSkipped(next); if (next) setScore(null); }}>
+{skipped ? "Skipped — undo" : "Skip this one"}
+</button>
+</div>
+{skipped && (
+<p className="muted mt8">Left out of the averages. Your review still shows if you write one.</p>
 )}
 </div>
 </div>
@@ -889,7 +903,7 @@ const monthAlbums = useMemo(
 const scoredByMe = useMemo(() => {
 if (!state) return 0;
 return monthAlbums.filter((a) =>
-state.ratings.some((r) => r.albumId === a.id && r.memberId === state.me && r.score !== null),
+state.ratings.some((r) => r.albumId === a.id && r.memberId === state.me && (r.score !== null || r.skipped)),
 ).length;
 }, [state, monthAlbums]);
 
@@ -971,7 +985,7 @@ Redeploy and the club sets itself up on the next load.
 <span className="progress-track" aria-hidden="true">
 <span className="progress-fill" style={{ width: `${(scoredByMe / monthAlbums.length) * 100}%` }} />
 </span>
-<span className="eyebrow">you&rsquo;ve scored {scoredByMe} of {monthAlbums.length}</span>
+<span className="eyebrow">you&rsquo;ve done {scoredByMe} of {monthAlbums.length}</span>
 </>
 )}
 <button className="btn sm right" onClick={() => setModal({ open: true, album: null })}><Plus /> Add album</button>

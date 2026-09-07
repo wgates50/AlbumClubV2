@@ -74,10 +74,11 @@ try {
       const memberId = resolve(who);
       if (!dry) {
         await pool.query(
-          `insert into ratings (album_id, member_id, score, review, fav_tracks, updated_at)
-           values ($1,$2,$3,$4,'[]',now())
-           on conflict (album_id, member_id) do update set score=excluded.score, review=excluded.review`,
-          [id, memberId, r.score, r.review ?? ""],
+          `insert into ratings (album_id, member_id, score, review, fav_tracks, skipped, updated_at)
+           values ($1,$2,$3,$4,'[]',$5,now())
+           on conflict (album_id, member_id) do update set score=excluded.score,
+             review=excluded.review, skipped=excluded.skipped`,
+          [id, memberId, r.score, r.review ?? "", Boolean(r.skipped)],
         );
       }
       ratings++;

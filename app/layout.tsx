@@ -1190,6 +1190,9 @@ label.field > span {
 .up-stats { display: flex; gap: 22px; margin-bottom: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
 .up-stats b { color: var(--text); font-family: var(--font-display); font-size: 17px; margin-right: 5px; font-weight: 400; }
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
+.btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.take-score.dim { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted-2); }
+input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
 .mb16 { margin-bottom: 16px; }
 
 @media (max-width: 700px) {

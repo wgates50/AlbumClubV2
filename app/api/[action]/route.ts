@@ -14,7 +14,7 @@ ytmUrl: string | null; appleUrl: string | null; tracks: string[]; createdAt: str
 };
 type Rating = {
 albumId: string; memberId: string; score: number | null; review: string;
-favTracks: string[]; updatedAt: string;
+favTracks: string[]; skipped: boolean; updatedAt: string;
 };
 
 const CONN =
@@ -55,6 +55,9 @@ await p.query(`create table if not exists shortlist (id text primary key, member
 await p.query(`create index if not exists shortlist_member_month_idx on shortlist(member_id, month)`);
 /* Added after the table shipped, so it has to be an alter rather than part of the create. */
 await p.query(`alter table music_accounts add column if not exists playlist_ids text not null default '[]'`);
+/* "Skipped" is a third state, distinct from an unscored album nobody has got
+   to yet — it says the listener made a decision, so stop nagging them. */
+await p.query(`alter table ratings add column if not exists skipped boolean not null default false`);
 }
 
 function parseList(raw: unknown): string[] {
@@ -90,9 +93,9 @@ tracks: ["Broke My Heart", "Volume", "Honey", "Campfire", "Come Find Me", "Climb
 createdAt: "2026-01-01T00:00:02.000Z" },
 ];
 const P_RAT: Rating[] = [
-{ albumId: "p1", memberId: "oli", score: 9.1, review: "Still sounds like it was recorded through a night bus window. Nothing else gets this much feeling out of so little.", favTracks: ["Archangel", "Shell of Light"], updatedAt: "2026-01-02T00:00:00.000Z" },
-{ albumId: "p1", memberId: "flik", score: 8.4, review: "Beautiful, but I need a lie down afterwards.", favTracks: ["Near Dark"], updatedAt: "2026-01-02T00:00:00.000Z" },
-{ albumId: "p2", memberId: "will", score: 8.8, review: "One motif for 46 minutes and it never wears out. The strings arriving properly got me.", favTracks: ["Movement 6"], updatedAt: "2026-01-02T00:00:00.000Z" },
+{ albumId: "p1", memberId: "oli", skipped: false, score: 9.1, review: "Still sounds like it was recorded through a night bus window. Nothing else gets this much feeling out of so little.", favTracks: ["Archangel", "Shell of Light"], updatedAt: "2026-01-02T00:00:00.000Z" },
+{ albumId: "p1", memberId: "flik", skipped: false, score: 8.4, review: "Beautiful, but I need a lie down afterwards.", favTracks: ["Near Dark"], updatedAt: "2026-01-02T00:00:00.000Z" },
+{ albumId: "p2", memberId: "will", skipped: false, score: 8.8, review: "One motif for 46 minutes and it never wears out. The strings arriving properly got me.", favTracks: ["Movement 6"], updatedAt: "2026-01-02T00:00:00.000Z" },
 ];
 const pv = {
 settings: new Map<string, string>([["club_name", "Album Club"]]),
@@ -164,11 +167,12 @@ await db().query(`delete from albums where id=$1`, [id]);
 async function listRatings(): Promise<Rating[]> {
 if (!hasDb) return [...pv.ratings];
 await ready();
-const r = await db().query(`select album_id,member_id,score,review,fav_tracks,updated_at from ratings`);
+const r = await db().query(`select album_id,member_id,score,review,fav_tracks,skipped,updated_at from ratings`);
 return r.rows.map((x) => ({
 albumId: x.album_id, memberId: x.member_id,
 score: x.score === null ? null : Number(x.score),
 review: x.review ?? "", favTracks: parseList(x.fav_tracks),
+skipped: Boolean(x.skipped),
 updatedAt: new Date(x.updated_at).toISOString(),
 }));
 }
@@ -179,8 +183,8 @@ if (i >= 0) pv.ratings[i] = r; else pv.ratings.push(r);
 return;
 }
 await ready();
-await db().query(`insert into ratings (album_id,member_id,score,review,fav_tracks,updated_at) values ($1,$2,$3,$4,$5,now()) on conflict (album_id,member_id) do update set score=excluded.score,review=excluded.review,fav_tracks=excluded.fav_tracks,updated_at=now()`,
-[r.albumId, r.memberId, r.score, r.review, JSON.stringify(r.favTracks ?? [])]);
+await db().query(`insert into ratings (album_id,member_id,score,review,fav_tracks,skipped,updated_at) values ($1,$2,$3,$4,$5,$6,now()) on conflict (album_id,member_id) do update set score=excluded.score,review=excluded.review,fav_tracks=excluded.fav_tracks,skipped=excluded.skipped,updated_at=now()`,
+[r.albumId, r.memberId, r.score, r.review, JSON.stringify(r.favTracks ?? []), r.skipped]);
 }
 
 /* ---- upcoming: accounts, tracked artists, shortlist ---- */
@@ -819,8 +823,12 @@ const b = await req.json().catch(() => ({}) as Record<string, unknown>);
 const albumId = String(b.albumId ?? "");
 if (!albumId) return bad("Missing album id");
 if (!(await listAlbums()).some((a) => a.id === albumId)) return bad("No such album", 404);
+/* Skipping and scoring are mutually exclusive — a skipped album carries no
+   number, which is what keeps it out of every average. */
+const skipped = Boolean(b.skipped);
 const rating = {
-albumId, memberId: auth.memberId, score: clampScore(b.score),
+albumId, memberId: auth.memberId, skipped,
+score: skipped ? null : clampScore(b.score),
 review: String(b.review ?? "").slice(0, 6000),
 favTracks: Array.isArray(b.favTracks)
 ? (b.favTracks as unknown[]).map((t) => String(t).slice(0, 200)).filter(Boolean).slice(0, 20)
