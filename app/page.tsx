@@ -18,7 +18,7 @@ type State = {
 ok: true; mode: "live" | "preview"; me: string | null; members: Member[];
 albums: Album[]; ratings: Rating[]; clubName: string; currentMonth: string;
 };
-type Wire = State | { ok: false; needsSetup?: boolean; needsAuth?: boolean; dbError?: boolean; message?: string };
+type Wire = State | { ok: false; needsSetup?: boolean; dbError?: boolean; message?: string };
 type Tab = "month" | "archive" | "table" | "club";
 
 /* ----------------------------- helpers ----------------------------- */
@@ -691,9 +691,9 @@ style={{ color: r?.score != null ? m.color : "var(--muted-2)" }}>
 
 /* ------------------------------ settings ------------------------------ */
 
-function ClubSettings({ clubName, members, me, mode, albumCount, onChanged }: {
+function ClubSettings({ clubName, members, me, albumCount, onChanged }: {
 clubName: string; members: Member[]; me: string | null;
-mode: "live" | "preview"; albumCount: number; onChanged: () => void;
+albumCount: number; onChanged: () => void;
 }) {
 const [name, setName] = useState(clubName);
 const [newMember, setNewMember] = useState("");
@@ -777,12 +777,6 @@ onClick={() => { post({ name: newMember.trim() }); setNewMember(""); }}><Plus />
 await api("/api/me", { method: "POST", body: JSON.stringify({ memberId: null }) });
 onChanged();
 }}>Switch member</button>
-{mode === "live" && (
-<button className="btn ghost" onClick={async () => {
-await api("/api/auth", { method: "DELETE" });
-window.location.reload();
-}}>Sign out</button>
-)}
 </div>
 <p className="muted mt26">{albumCount} {albumCount === 1 ? "album" : "albums"} on record.</p>
 </div>
@@ -793,7 +787,6 @@ window.location.reload();
 
 function SetupScreen({ onDone }: { onDone: () => void }) {
 const [clubName, setClubName] = useState("Album Club");
-const [passcode, setPasscode] = useState("");
 const [names, setNames] = useState(["Will", "Oli", "Flik"]);
 const [error, setError] = useState("");
 const [busy, setBusy] = useState(false);
@@ -803,15 +796,10 @@ return (
 <div className="gate-card">
 <p className="eyebrow mb12">First run</p>
 <h1>Set up the club</h1>
-<p className="lede">One passcode for everyone. Share it with the others and they&rsquo;re in — no accounts, no sign-ups.</p>
+<p className="lede">Send the others the link and they&rsquo;re in — no passcode, no accounts, no sign-ups.</p>
 <label className="field">
 <span>Club name</span>
 <input type="text" value={clubName} onChange={(e) => setClubName(e.target.value)} />
-</label>
-<label className="field">
-<span>Shared passcode</span>
-<input type="text" value={passcode} placeholder="Something you'll all remember"
-onChange={(e) => setPasscode(e.target.value)} />
 </label>
 <div className="field">
 <span className="lbl">Members</span>
@@ -822,12 +810,12 @@ onChange={(e) => setNames((p) => p.map((x, j) => (j === i ? e.target.value : x))
 <button className="btn sm ghost" onClick={() => setNames((p) => [...p, ""])}>Add another</button>
 </div>
 {error && <p className="error">{error}</p>}
-<button className="btn primary wfull mt14" disabled={busy || passcode.trim().length < 4}
+<button className="btn primary wfull mt14" disabled={busy || !names.some((n) => n.trim())}
 onClick={async () => {
 setBusy(true); setError("");
 const res = await api("/api/setup", {
 method: "POST",
-body: JSON.stringify({ clubName, passcode, members: names.map((n) => n.trim()).filter(Boolean) }),
+body: JSON.stringify({ clubName, members: names.map((n) => n.trim()).filter(Boolean) }),
 });
 setBusy(false);
 if (!res.ok) setError(String(res.data.error ?? "Could not set up the club")); else onDone();
@@ -837,28 +825,13 @@ if (!res.ok) setError(String(res.data.error ?? "Could not set up the club")); el
 );
 }
 
-function PasscodeScreen({ onDone }: { onDone: () => void }) {
-const [passcode, setPasscode] = useState("");
-const [error, setError] = useState("");
-const [busy, setBusy] = useState(false);
-const submit = async () => {
-setBusy(true); setError("");
-const res = await api("/api/auth", { method: "POST", body: JSON.stringify({ passcode }) });
-setBusy(false);
-if (!res.ok) setError(String(res.data.error ?? "That didn't work")); else onDone();
-};
+function ProblemScreen({ onDone }: { onDone: () => void }) {
 return (
 <div className="gate">
 <div className="gate-card">
 <h1>Album <em className="gold-i">Club</em></h1>
-<p className="lede">Three albums a month. Enter the passcode to come in.</p>
-<input type="password" autoFocus value={passcode} placeholder="Passcode"
-onChange={(e) => setPasscode(e.target.value)}
-onKeyDown={(e) => e.key === "Enter" && submit()} />
-{error && <p className="error">{error}</p>}
-<button className="btn primary wfull mt14" disabled={busy || !passcode} onClick={submit}>
-{busy ? "Checking…" : "Enter"}
-</button>
+<p className="lede">Couldn&rsquo;t load the club just now.</p>
+<button className="btn primary wfull mt14" onClick={onDone}>Try again</button>
 </div>
 </div>
 );
@@ -936,7 +909,7 @@ return (
 </div>
 );
 if (!wire.ok && wire.needsSetup) return <SetupScreen onDone={load} />;
-if (!wire.ok || !state) return <PasscodeScreen onDone={load} />;
+if (!wire.ok || !state) return <ProblemScreen onDone={load} />;
 if (!state.me) return <MemberScreen members={state.members} clubName={state.clubName} onDone={load} />;
 
 const meMember = state.members.find((m) => m.id === state.me);
@@ -1029,7 +1002,7 @@ me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al 
 {tab === "table" && <Leaderboard albums={state.albums} members={state.members} ratings={state.ratings} />}
 {tab === "club" && (
 <ClubSettings clubName={state.clubName} members={state.members} me={state.me}
-mode={state.mode} albumCount={state.albums.length} onChanged={load} />
+albumCount={state.albums.length} onChanged={load} />
 )}
 </main>
 

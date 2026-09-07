@@ -206,51 +206,29 @@ const b = Buffer.from(crypto.createHmac("sha256", secret).update(value).digest("
 if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
 return value;
 }
-function hashPass(pass: string, secret: string): string {
-return crypto.createHmac("sha256", secret).update("passcode:" + pass.trim().toLowerCase()).digest("hex");
-}
 async function clubConfigured(): Promise<boolean> {
 if (!hasDb) return true;
-if (process.env.CLUB_PASSCODE) return true;
-return Boolean((await getSettings()).passcode_hash);
-}
-async function stamp(secret: string): Promise<string> {
-if (!hasDb) return "preview";
-if (process.env.CLUB_PASSCODE) return hashPass(process.env.CLUB_PASSCODE, secret).slice(0, 12);
-return ((await getSettings()).passcode_hash ?? "").slice(0, 12);
+const s = await getSettings();
+/* passcode_hash is only ever read here, so a club set up before the passcode
+   was removed stays set up instead of being sent back through first-run. */
+return Boolean(s.configured || s.passcode_hash);
 }
 type Session = { authed: boolean; memberId: string | null; needsSetup: boolean };
 
+/* No passcode: anyone who can reach the app is in. The cookie only remembers
+   which member you picked, signed so it can't be edited by hand. */
 async function readSession(): Promise<Session> {
 const secret = await getSecret();
 const jar = await cookies();
 const raw = jar.get(COOKIE)?.value ?? "";
-if (!hasDb) {
-const v = raw ? unsign(raw, secret) : null;
-return { authed: true, memberId: v ? v.split("|")[1] || null : null, needsSetup: false };
-}
+const memberId = raw ? unsign(raw, secret) : null;
+if (!hasDb) return { authed: true, memberId: memberId || null, needsSetup: false };
 if (!(await clubConfigured())) return { authed: false, memberId: null, needsSetup: true };
-if (!raw) return { authed: false, memberId: null, needsSetup: false };
-const v = unsign(raw, secret);
-if (!v) return { authed: false, memberId: null, needsSetup: false };
-const [st, memberId] = v.split("|");
-if (!st || st !== (await stamp(secret))) return { authed: false, memberId: null, needsSetup: false };
 return { authed: true, memberId: memberId || null, needsSetup: false };
-}
-async function checkPasscode(pass: string): Promise<boolean> {
-if (!hasDb) return true;
-const secret = await getSecret();
-if (process.env.CLUB_PASSCODE)
-return pass.trim().toLowerCase() === process.env.CLUB_PASSCODE.trim().toLowerCase();
-const s = await getSettings();
-if (!s.passcode_hash) return false;
-const a = Buffer.from(hashPass(pass, secret));
-const b = Buffer.from(s.passcode_hash);
-return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 async function sessionToken(memberId: string | null): Promise<string> {
 const secret = await getSecret();
-return sign(`${await stamp(secret)}|${memberId ?? ""}`, secret);
+return sign(memberId ?? "", secret);
 }
 
 /* ---- helpers ---- */
@@ -311,7 +289,6 @@ const r = await route(ctx);
 if (r === "state") {
 const session = await readSession();
 if (session.needsSetup) return J({ ok: false, needsSetup: true, mode: "live" });
-if (!session.authed) return J({ ok: false, needsAuth: true, mode: hasDb ? "live" : "preview" });
 try {
 const { settings, albums, ratings } = await clubData();
 return J({
@@ -432,18 +409,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 const r = await route(ctx);
 const b = await req.json().catch(() => ({}) as Record<string, unknown>);
 
-if (r === "auth") {
-const passcode = String(b.passcode ?? "");
-if (!passcode) return bad("Enter the passcode");
-if (!(await checkPasscode(passcode))) {
-await new Promise((res) => setTimeout(res, 400));
-return bad("That passcode doesn't match", 401);
-}
-const res = NextResponse.json({ ok: true });
-res.cookies.set(COOKIE, await sessionToken(b.memberId ? String(b.memberId) : null), COOKIE_OPTS);
-return res;
-}
-
 if (r === "me") {
 const s = await readSession();
 if (!s.authed) return bad("Not signed in", 401);
@@ -458,13 +423,10 @@ return res;
 if (r === "setup") {
 if (!hasDb) return bad("No database attached yet", 409);
 if (await clubConfigured()) return bad("This club is already set up", 409);
-const passcode = String(b.passcode ?? "").trim();
 const names: string[] = Array.isArray(b.members)
 ? (b.members as unknown[]).map((n) => String(n).trim()).filter(Boolean)
 : [];
-if (passcode.length < 4) return bad("Passcode needs at least 4 characters");
 if (!names.length) return bad("Add at least one member");
-const secret = await getSecret();
 await setSetting("club_name", String(b.clubName ?? "Album Club").trim() || "Album Club");
 const used = new Set<string>();
 let i = 0;
@@ -475,7 +437,7 @@ used.add(id);
 await saveMember({ id, name, color: PALETTE[i % PALETTE.length], sortOrder: i });
 i += 1;
 }
-await setSetting("passcode_hash", hashPass(passcode, secret));
+await setSetting("configured", "1");
 const res = NextResponse.json({ ok: true });
 res.cookies.set(COOKIE, await sessionToken(null), COOKIE_OPTS);
 return res;
@@ -589,11 +551,6 @@ return J({ ok: true, album: next });
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
 const r = await route(ctx);
-if (r === "auth") {
-const res = NextResponse.json({ ok: true });
-res.cookies.set(COOKIE, "", { ...COOKIE_OPTS, maxAge: 0 });
-return res;
-}
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
 const id = req.nextUrl.searchParams.get("id");

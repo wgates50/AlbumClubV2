@@ -14,11 +14,11 @@ see the guide Claude produced alongside this file. The short version:
 3. In the Vercel project: **Storage → Create Database → Neon (Postgres)**, free
    plan, connected to this project. Vercel adds `DATABASE_URL` for you.
 4. Redeploy so the app picks up the variable.
-5. Open the URL. You get a one-time setup screen — club name, a shared passcode,
-   and the member names. Tables create themselves; there is no migration step.
+5. Open the URL. You get a one-time setup screen — club name and the member
+   names. Tables create themselves; there is no migration step.
 
-Send the others the URL and the passcode. They type it once, pick their name, done.
-No accounts, no sign-ups.
+Send the others the URL. They open it, pick their name, done. No passcode, no
+accounts, no sign-ups — anyone with the link is in, so treat the URL as the key.
 
 ---
 
@@ -62,22 +62,23 @@ Worth pulling a copy every few months and dropping it somewhere safe.
 
 ```
 app/
-  layout.tsx            shell + fonts
+  layout.tsx            shell, fonts and the design system (styles are inline)
   page.tsx              the entire UI (one client component)
-  globals.css           design system
-  api/[[...slug]]/      every endpoint, one file
-lib/
-  core.ts               Postgres access, schema, sessions, helpers
+  api/[action]/route.ts every endpoint, plus Postgres access and schema
 ```
 
 **Data model.** `members`, `albums` (with `month` as `YYYY-MM`), `ratings` (one row
 per member per album) and a `settings` key/value table. Tables are created on first
-connection — `init()` in `lib/core.ts`.
+connection — `init()` in `app/api/[action]/route.ts`.
 
-**Auth** is one shared passcode, HMAC-signed into a cookie. The passcode hash and
-signing secret live in the `settings` table, set during first-run setup. Setting a
-`CLUB_PASSCODE` environment variable overrides the stored one (and invalidates
-existing sessions, which is how you'd rotate it).
+**Auth.** There is none. Anyone who can reach the URL can read and write, so the
+link is the only thing keeping the club private — don't post it anywhere public. The
+cookie holds nothing but which member you picked, HMAC-signed with a secret in the
+`settings` table so it can't be edited by hand. A `configured` flag in the same table
+is what marks first-run setup as done.
+
+If you later want it closed off, the tidiest route is Vercel's own access protection
+in front of the whole deployment, rather than putting a passcode back in the app.
 
 **Artwork** is stored as a URL from Apple's CDN rather than a copy of the image. If
 a URL ever dies, the sleeve falls back to a generated gradient built from the artist
