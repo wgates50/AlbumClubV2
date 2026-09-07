@@ -419,6 +419,34 @@ const secret = await getSecret();
 return sign(memberId ?? "", secret);
 }
 
+/* ---- admin ---- */
+
+/* The code lives in the environment, never in the bundle or the repository —
+   this repo is public. Unset means admin is simply off. It is a guard against
+   fat fingers, not an attacker: anyone with the link can already score as
+   anyone, so this only gates editing *other* people's entries. */
+const ADMIN_CODE = (process.env.ADMIN_CODE ?? "").trim();
+const ADMIN_COOKIE = "ac_admin";
+
+function adminStamp(secret: string): string {
+return crypto.createHmac("sha256", secret).update("admin:" + ADMIN_CODE).digest("hex").slice(0, 16);
+}
+async function isAdmin(): Promise<boolean> {
+if (!ADMIN_CODE) return false;
+const secret = await getSecret();
+const jar = await cookies();
+const raw = jar.get(ADMIN_COOKIE)?.value ?? "";
+if (!raw) return false;
+/* Deriving the stamp from the code means changing the code in Vercel signs
+   every existing admin session out. */
+return unsign(raw, secret) === adminStamp(secret);
+}
+function codeMatches(given: string): boolean {
+const a = Buffer.from(given);
+const b = Buffer.from(ADMIN_CODE);
+return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /* ---- helpers ---- */
 
 function slug(s: string): string {
@@ -541,6 +569,10 @@ warning: "Couldn't reach the album lookup — you can still type it in by hand."
 }
 }
 
+if (r === "admin") {
+return J({ ok: true, configured: Boolean(ADMIN_CODE), unlocked: await isAdmin() });
+}
+
 if (r === "upcoming") {
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
@@ -647,6 +679,20 @@ if (memberId && !(await listMembers()).some((m) => m.id === memberId))
 return bad("Unknown member");
 const res = NextResponse.json({ ok: true, me: memberId });
 res.cookies.set(COOKIE, await sessionToken(memberId), COOKIE_OPTS);
+return res;
+}
+
+if (r === "admin") {
+if (!ADMIN_CODE) return bad("Admin isn't switched on for this deployment yet.", 501);
+const code = String(b.code ?? "").trim();
+if (!code || !codeMatches(code)) {
+/* A four-digit code is 10,000 guesses; make each one cost something. */
+await new Promise((res) => setTimeout(res, 700));
+return bad("That code doesn't match", 401);
+}
+const secret = await getSecret();
+const res = NextResponse.json({ ok: true });
+res.cookies.set(ADMIN_COOKIE, sign(adminStamp(secret), secret), COOKIE_OPTS);
 return res;
 }
 
@@ -823,11 +869,21 @@ const b = await req.json().catch(() => ({}) as Record<string, unknown>);
 const albumId = String(b.albumId ?? "");
 if (!albumId) return bad("Missing album id");
 if (!(await listAlbums()).some((a) => a.id === albumId)) return bad("No such album", 404);
+/* An admin may write on someone else's behalf; everyone else only ever
+   writes their own row, whatever they put in the body. */
+const asMember = str(b.memberId);
+let memberId = auth.memberId;
+if (asMember && asMember !== auth.memberId) {
+if (!(await isAdmin())) return bad("Only an admin can edit someone else's score", 403);
+if (!(await listMembers()).some((m) => m.id === asMember)) return bad("Unknown member", 404);
+memberId = asMember;
+}
+
 /* Skipping and scoring are mutually exclusive — a skipped album carries no
    number, which is what keeps it out of every average. */
 const skipped = Boolean(b.skipped);
 const rating = {
-albumId, memberId: auth.memberId, skipped,
+albumId, memberId, skipped,
 score: skipped ? null : clampScore(b.score),
 review: String(b.review ?? "").slice(0, 6000),
 favTracks: Array.isArray(b.favTracks)
@@ -884,6 +940,12 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 const r = await route(ctx);
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
+
+if (r === "admin") {
+const res = NextResponse.json({ ok: true });
+res.cookies.set(ADMIN_COOKIE, "", { ...COOKIE_OPTS, maxAge: 0 });
+return res;
+}
 
 if (r === "spotify" || r === "youtube") {
 await deleteAccount(auth.memberId);

@@ -1090,6 +1090,10 @@ label.field > span {
   .month-meta .right { margin-left: 0; width: 100%; justify-content: center; }
   .up-row-actions { padding-left: 0; }
   .up-connect h2 { font-size: 32px; }
+  .admin-row { grid-template-columns: 1fr; }
+  .admin-row textarea { grid-column: 1; }
+  .admin-album { flex-direction: column; }
+  .album-tab { max-width: 200px; }
 }
 
 /* Touch input, whatever the screen width: the score slider is the thing people
@@ -1228,6 +1232,33 @@ label.field > span {
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .art-missed { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+/* ---- one album at a time ---- */
+.album-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 26px; scrollbar-width: none; }
+.album-tabs::-webkit-scrollbar { display: none; }
+.album-tab { flex: none; display: flex; align-items: center; gap: 10px; cursor: pointer; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 15px; max-width: 260px; transition: border-color 0.18s var(--ease), background 0.18s var(--ease); }
+.album-tab:hover { border-color: var(--muted-2); }
+.album-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.album-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--line); }
+.album-tab-dot.done { background: var(--accent); }
+.album-tab-text { min-width: 0; display: flex; flex-direction: column; }
+.album-tab-title { font-family: var(--font-display); font-size: 16px; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-tab-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- admin ---- */
+.admin-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px 16px; align-items: center;
+  padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+.admin-who { display: flex; align-items: center; gap: 9px; font-size: 14px; }
+.admin-fields { display: flex; gap: 8px; align-items: center; }
+.admin-score { width: 92px; }
+.admin-row textarea { grid-column: 2; min-height: 62px; }
+.admin-album { display: flex; gap: 18px; align-items: flex-start; }
+.admin-art { width: 108px; height: 108px; flex: none; border-radius: 2px; overflow: hidden; background: var(--surface-2); }
+.admin-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.admin .field { margin-bottom: 14px; }
 .mb12 { margin-bottom: 12px; }
 .mt14 { margin-top: 14px; }
 .take-score.dim { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted-2); }

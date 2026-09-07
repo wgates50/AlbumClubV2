@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fallbackArt } from "./lib/art";
 import Upcoming from "./upcoming";
+import Admin from "./admin";
 
 /* ------------------------------ types ------------------------------ */
 
@@ -21,7 +22,7 @@ ok: true; mode: "live" | "preview"; me: string | null; members: Member[];
 albums: Album[]; ratings: Rating[]; clubName: string; currentMonth: string;
 };
 type Wire = State | { ok: false; needsSetup?: boolean; dbError?: boolean; message?: string };
-type Tab = "month" | "upcoming" | "archive" | "table" | "club";
+type Tab = "month" | "upcoming" | "archive" | "table" | "club" | "admin";
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -216,7 +217,7 @@ const t = newTrack.trim();
 if (t && !favs.includes(t)) setFavs((f) => [...f, t]);
 setNewTrack("");
 };
-const extraFavs = favs.filter((f) => !album.tracks.includes(f));
+const unpicked = album.tracks.filter((t) => !favs.includes(t));
 
 return (
 <article className="album">
@@ -287,23 +288,29 @@ onChange={(e) => setReview(e.target.value)} />
 
 <div className="field">
 <span className="lbl">Favourite tracks</span>
-{album.tracks.length > 0 && (
+{favs.length > 0 && (
 <div className="tracks mb9">
-{album.tracks.map((t) => (
-<button key={t} type="button" className={`track${favs.includes(t) ? " on" : ""}`} onClick={() => toggleFav(t)}>{t}</button>
+{favs.map((t) => (
+<button key={t} type="button" className="track on" onClick={() => toggleFav(t)}
+title="Remove">{t} <span aria-hidden="true">×</span></button>
 ))}
 </div>
 )}
-{extraFavs.length > 0 && (
-<div className="tracks mb9">
-{extraFavs.map((t) => (
-<button key={t} type="button" className="track on" onClick={() => toggleFav(t)}>{t}</button>
-))}
-</div>
+{/* Pick from the tracklist where we have one — a long album is 20+ chips
+    otherwise, which is a lot of screen for a couple of picks. */}
+{unpicked.length > 0 && (
+<select className="mb9" value="" aria-label="Add a favourite track"
+onChange={(e) => { if (e.target.value) toggleFav(e.target.value); }}>
+<option value="">Pick a track&hellip;</option>
+{unpicked.map((t) => <option key={t} value={t}>{t}</option>)}
+</select>
+)}
+{album.tracks.length === 0 && (
+<p className="muted mb9">No tracklist stored for this one — type them in.</p>
 )}
 <div className="flex gap8">
 <input type="text" value={newTrack}
-placeholder={album.tracks.length ? "Add another track" : "Type a track name"}
+placeholder={album.tracks.length ? "Or type one that isn't listed" : "Type a track name"}
 onChange={(e) => setNewTrack(e.target.value)}
 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTrack(); } }} />
 <button className="btn sm" type="button" onClick={addTrack}>Add</button>
@@ -963,6 +970,7 @@ const [tab, setTab] = useState<Tab>(() =>
 typeof window !== "undefined" && new URLSearchParams(window.location.search).has("code") ? "upcoming" : "month",
 );
 const [cursor, setCursor] = useState(thisMonth());
+const [openAlbum, setOpenAlbum] = useState<string | null>(null);
 const [modal, setModal] = useState<{ open: boolean; album: Album | null }>({ open: false, album: null });
 
 const load = useCallback(async () => {
@@ -982,6 +990,12 @@ const monthAlbums = useMemo(
 () => (state ? state.albums.filter((a) => a.month === cursor) : []),
 [state, cursor],
 );
+/* One album on screen at a time; the strip above switches between them. */
+const shown = useMemo(
+() => monthAlbums.find((a) => a.id === openAlbum) ?? monthAlbums[0] ?? null,
+[monthAlbums, openAlbum],
+);
+
 const scoredByMe = useMemo(() => {
 if (!state) return 0;
 return monthAlbums.filter((a) =>
@@ -1017,7 +1031,7 @@ return (
 {state.clubName.replace(/\s*club\s*$/i, "")}<span className="dot"> Club</span>
 </div>
 <nav className="tabs" role="tablist">
-{([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"]] as [Tab, string][]).map(
+{([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"], ["admin", "Admin"]] as [Tab, string][]).map(
 ([id, text]) => (
 <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{text}</button>
 ),
@@ -1082,10 +1096,30 @@ Redeploy and the club sets itself up on the next load.
 </button>
 </div>
 ) : (
-monthAlbums.map((a) => (
-<AlbumCard key={a.id} album={a} members={state.members} ratings={state.ratings}
+<>
+{monthAlbums.length > 1 && (
+<div className="album-tabs" role="tablist">
+{monthAlbums.map((a) => {
+const mine = state.ratings.find((r) => r.albumId === a.id && r.memberId === state.me);
+const done = Boolean(mine && (mine.score !== null || mine.skipped));
+return (
+<button key={a.id} className="album-tab" role="tab" aria-selected={shown?.id === a.id}
+onClick={() => setOpenAlbum(a.id)}>
+<span className={`album-tab-dot${done ? " done" : ""}`} aria-hidden="true" />
+<span className="album-tab-text">
+<span className="album-tab-title">{a.title}</span>
+<span className="album-tab-sub">{a.artist}</span>
+</span>
+</button>
+);
+})}
+</div>
+)}
+{shown && (
+<AlbumCard key={shown.id} album={shown} members={state.members} ratings={state.ratings}
 me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al })} />
-))
+)}
+</>
 )}
 </>
 )}
@@ -1098,6 +1132,10 @@ me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al 
 <Archive albums={state.albums} members={state.members} ratings={state.ratings} currentMonth={state.currentMonth} />
 )}
 {tab === "table" && <Leaderboard albums={state.albums} members={state.members} ratings={state.ratings} />}
+{tab === "admin" && (
+<Admin albums={state.albums} members={state.members} ratings={state.ratings} onChanged={load} />
+)}
+
 {tab === "club" && (
 <ClubSettings clubName={state.clubName} members={state.members} me={state.me}
 albums={state.albums} onChanged={load} />
