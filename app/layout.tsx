@@ -1232,6 +1232,13 @@ label.field > span {
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .art-missed { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.swatches { display: flex; flex-wrap: wrap; gap: 7px; width: 100%; padding: 12px 0 4px; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line) inset;
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease); }
+.swatch:hover { transform: scale(1.12); }
+.swatch.on { border-color: var(--text); }
+.member-line { flex-wrap: wrap; }
 
 /* ---- one album at a time ---- */
 .album-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 26px; scrollbar-width: none; }

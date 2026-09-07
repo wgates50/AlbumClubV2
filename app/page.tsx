@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fallbackArt } from "./lib/art";
+import { PALETTE, accentVars } from "./lib/accent";
 import Upcoming from "./upcoming";
 import Admin from "./admin";
 
@@ -166,6 +167,8 @@ album, members, ratings, me, onChanged, onEdit,
 album: Album; members: Member[]; ratings: Rating[]; me: string | null;
 onChanged: () => void; onEdit: (a: Album) => void;
 }) {
+/* Whoever picked this record sets its colour for as long as it's on screen. */
+const pickedBy = members.find((m) => m.id === album.chosenBy);
 const mine = ratings.find((r) => r.albumId === album.id && r.memberId === me);
 const [score, setScore] = useState<number | null>(mine?.score ?? null);
 const [review, setReview] = useState(mine?.review ?? "");
@@ -220,7 +223,7 @@ setNewTrack("");
 const unpicked = album.tracks.filter((t) => !favs.includes(t));
 
 return (
-<article className="album">
+<article className="album" style={accentVars(pickedBy?.color)}>
 <div className="album-top">
 <Sleeve album={album} />
 <div>
@@ -795,6 +798,7 @@ const albumCount = albums.length;
 const [name, setName] = useState(clubName);
 const [newMember, setNewMember] = useState("");
 const [editing, setEditing] = useState<string | null>(null);
+const [colouring, setColouring] = useState<string | null>(null);
 const [draft, setDraft] = useState("");
 const [error, setError] = useState("");
 const [busy, setBusy] = useState(false);
@@ -843,9 +847,19 @@ onClick={async () => { await post({ id: m.id, name: draft }); setEditing(null); 
 <span className="grow">
 {m.name}{m.id === me && <span className="muted"> — that&rsquo;s you</span>}
 </span>
+<button className="btn sm ghost" onClick={() => setColouring(colouring === m.id ? null : m.id)}>Colour</button>
 <button className="btn sm ghost" onClick={() => { setEditing(m.id); setDraft(m.name); }}>Rename</button>
 <button className="btn sm ghost danger" disabled={busy} onClick={() => removeMember(m.id)}>Remove</button>
 </>
+)}
+{colouring === m.id && (
+<div className="swatches">
+{PALETTE.map((c) => (
+<button key={c} className={`swatch${m.color === c ? " on" : ""}`} style={{ background: c }}
+aria-label={`Use this colour for ${m.name}`} aria-pressed={m.color === c}
+onClick={async () => { await post({ id: m.id, color: c }); setColouring(null); }} />
+))}
+</div>
 )}
 </div>
 ))}
@@ -1024,7 +1038,7 @@ const meMember = state.members.find((m) => m.id === state.me);
 const label = monthLabel(cursor);
 
 return (
-<>
+<div style={accentVars(meMember?.color)}>
 <header className="topbar">
 <div className="topbar-inner">
 <div className="brand">
@@ -1104,6 +1118,7 @@ const mine = state.ratings.find((r) => r.albumId === a.id && r.memberId === stat
 const done = Boolean(mine && (mine.score !== null || mine.skipped));
 return (
 <button key={a.id} className="album-tab" role="tab" aria-selected={shown?.id === a.id}
+style={accentVars(state.members.find((m) => m.id === a.chosenBy)?.color)}
 onClick={() => setOpenAlbum(a.id)}>
 <span className={`album-tab-dot${done ? " done" : ""}`} aria-hidden="true" />
 <span className="album-tab-text">
@@ -1146,6 +1161,6 @@ albums={state.albums} onChanged={load} />
 <AlbumModal album={modal.album} month={cursor} members={state.members} me={state.me}
 onClose={() => setModal({ open: false, album: null })} onSaved={load} />
 )}
-</>
+</div>
 );
 }

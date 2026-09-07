@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Pool } from "pg";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
+import { PALETTE } from "../../lib/accent";
 
 /* Album Club — the whole server side: database, sessions and every endpoint.
    Kept in one file so the project stays at four files total. */
@@ -473,7 +474,7 @@ type Ctx = { params: Promise<{ action?: string }> };
 const route = async (c: Ctx) => (await c.params).action ?? "";
 const J = (d: unknown, s = 200) => NextResponse.json(d, { status: s });
 const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
-const PALETTE = ["#e0b25c", "#e4715a", "#5fb3a1", "#a98bd8", "#6f9ce0", "#d4886f"];
+
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const str = (v: unknown): string | null => {
 const s = v === null || v === undefined ? "" : String(v).trim();
@@ -572,6 +573,8 @@ warning: "Couldn't reach the album lookup — you can still type it in by hand."
 if (r === "admin") {
 return J({ ok: true, configured: Boolean(ADMIN_CODE), unlocked: await isAdmin() });
 }
+
+if (r === "palette") return J({ ok: true, palette: PALETTE });
 
 if (r === "upcoming") {
 const auth = await requireMember();
@@ -838,19 +841,30 @@ if (r === "members") {
 if (typeof b.clubName === "string")
 await setSetting("club_name", b.clubName.trim().slice(0, 60) || "Album Club");
 const members = await listMembers();
+
+/* Picking a colour doesn't come with a name, so it gets its own path. */
+const wantColour = str(b.color);
+if (b.id && wantColour && typeof b.name !== "string") {
+const ex = members.find((m) => m.id === String(b.id));
+if (!ex) return bad("No such member", 404);
+if (!PALETTE.includes(wantColour)) return bad("That isn't one of the club colours");
+await saveMember({ ...ex, color: wantColour });
+return J({ ok: true, members: await listMembers() });
+}
+
 if (typeof b.name === "string" && b.name.trim()) {
 const name = b.name.trim().slice(0, 40);
 if (b.id) {
 const ex = members.find((m) => m.id === String(b.id));
 if (!ex) return bad("No such member", 404);
-await saveMember({ ...ex, name, color: typeof b.color === "string" ? b.color : ex.color });
+await saveMember({ ...ex, name, color: wantColour && PALETTE.includes(wantColour) ? wantColour : ex.color });
 } else {
 let id = slug(name);
 let n = 2;
 while (members.some((m) => m.id === id)) id = `${slug(name)}-${n++}`;
 await saveMember({
 id, name,
-color: typeof b.color === "string" ? b.color : PALETTE[members.length % PALETTE.length],
+color: wantColour && PALETTE.includes(wantColour) ? wantColour : PALETTE[members.length % PALETTE.length],
 sortOrder: members.length,
 });
 }
