@@ -48,6 +48,12 @@ and never breaks.
 
 ---
 
+## The spreadsheet years
+
+Everything the club did before this app — albums, who chose them, scores and
+reviews — imports with `scripts/import-history.mjs`. See `scripts/README.md`.
+The reviews themselves are not in this repository, which is public.
+
 ## Backups
 
 *Club* → **Download JSON** is the complete record: members, albums, every score,

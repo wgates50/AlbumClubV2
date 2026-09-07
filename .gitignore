@@ -30,3 +30,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# the club's own reviews — kept out of a public repo; see scripts/README.md
+/scripts/history.json
