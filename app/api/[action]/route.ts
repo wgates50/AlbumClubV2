@@ -48,6 +48,11 @@ await p.query(`create table if not exists members (id text primary key, name tex
 await p.query(`create table if not exists albums (id text primary key, month text not null, title text not null, artist text not null, year int, chosen_by text, art_url text, spotify_url text, ytm_url text, apple_url text, tracks text not null default '[]', created_at timestamptz not null default now())`);
 await p.query(`create table if not exists ratings (album_id text not null, member_id text not null, score numeric(4,1), review text not null default '', fav_tracks text not null default '[]', updated_at timestamptz not null default now(), primary key (album_id, member_id))`);
 await p.query(`create index if not exists albums_month_idx on albums(month)`);
+/* Upcoming: each member's own connected service, tracked artists and shortlist. */
+await p.query(`create table if not exists music_accounts (member_id text primary key, service text not null, access_token text, refresh_token text, expires_at timestamptz, client_id text, scanned_at timestamptz, connected_at timestamptz not null default now())`);
+await p.query(`create table if not exists tracked_artists (member_id text not null, artist_id text not null, name text not null, image_url text, source text not null default 'spotify', excluded boolean not null default false, updated_at timestamptz not null default now(), primary key (member_id, artist_id))`);
+await p.query(`create table if not exists shortlist (id text primary key, member_id text not null, month text not null, title text not null, artist text not null, release_date text, art_url text, spotify_url text, source text, added_at timestamptz not null default now())`);
+await p.query(`create index if not exists shortlist_member_month_idx on shortlist(member_id, month)`);
 }
 
 function parseList(raw: unknown): string[] {
@@ -174,6 +179,137 @@ return;
 await ready();
 await db().query(`insert into ratings (album_id,member_id,score,review,fav_tracks,updated_at) values ($1,$2,$3,$4,$5,now()) on conflict (album_id,member_id) do update set score=excluded.score,review=excluded.review,fav_tracks=excluded.fav_tracks,updated_at=now()`,
 [r.albumId, r.memberId, r.score, r.review, JSON.stringify(r.favTracks ?? [])]);
+}
+
+/* ---- upcoming: accounts, tracked artists, shortlist ---- */
+
+type Account = {
+memberId: string; service: string; accessToken: string | null; refreshToken: string | null;
+expiresAt: string | null; clientId: string | null; scannedAt: string | null;
+};
+type TrackedArtist = { id: string; name: string; imageUrl: string | null; source: string; excluded: boolean };
+type ShortlistItem = {
+id: string; memberId: string; month: string; title: string; artist: string;
+releaseDate: string | null; artUrl: string | null; spotifyUrl: string | null; source: string | null; addedAt: string;
+};
+
+async function getAccount(memberId: string): Promise<Account | null> {
+if (!hasDb) return null;
+await ready();
+const r = await db().query(`select member_id,service,access_token,refresh_token,expires_at,client_id,scanned_at from music_accounts where member_id=$1`, [memberId]);
+const x = r.rows[0];
+if (!x) return null;
+return {
+memberId: x.member_id, service: x.service, accessToken: x.access_token, refreshToken: x.refresh_token,
+expiresAt: x.expires_at ? new Date(x.expires_at).toISOString() : null,
+clientId: x.client_id, scannedAt: x.scanned_at ? new Date(x.scanned_at).toISOString() : null,
+};
+}
+async function saveAccount(a: Account): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`insert into music_accounts (member_id,service,access_token,refresh_token,expires_at,client_id) values ($1,$2,$3,$4,$5,$6) on conflict (member_id) do update set service=excluded.service, access_token=excluded.access_token, refresh_token=coalesce(excluded.refresh_token, music_accounts.refresh_token), expires_at=excluded.expires_at, client_id=excluded.client_id`,
+[a.memberId, a.service, a.accessToken, a.refreshToken, a.expiresAt, a.clientId]);
+}
+async function deleteAccount(memberId: string): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`delete from music_accounts where member_id=$1`, [memberId]);
+await db().query(`delete from tracked_artists where member_id=$1`, [memberId]);
+}
+async function markScanned(memberId: string): Promise<void> {
+if (!hasDb) return;
+await db().query(`update music_accounts set scanned_at=now() where member_id=$1`, [memberId]);
+}
+
+async function listTrackedArtists(memberId: string): Promise<TrackedArtist[]> {
+if (!hasDb) return [];
+await ready();
+const r = await db().query(`select artist_id,name,image_url,source,excluded from tracked_artists where member_id=$1 order by name asc`, [memberId]);
+return r.rows.map((x) => ({ id: x.artist_id, name: x.name, imageUrl: x.image_url, source: x.source, excluded: x.excluded }));
+}
+/* A scan is the full picture of who you follow, so it replaces the stored set —
+   but exclusions are the member's own choice and are carried across. */
+async function replaceTrackedArtists(memberId: string, artists: TrackedArtist[]): Promise<void> {
+if (!hasDb) return;
+await ready();
+const prev = await listTrackedArtists(memberId);
+const wasExcluded = new Set(prev.filter((a) => a.excluded).map((a) => a.id));
+const c = await db().connect();
+try {
+await c.query("begin");
+await c.query(`delete from tracked_artists where member_id=$1`, [memberId]);
+for (const a of artists) {
+await c.query(`insert into tracked_artists (member_id,artist_id,name,image_url,source,excluded) values ($1,$2,$3,$4,$5,$6) on conflict (member_id,artist_id) do nothing`,
+[memberId, a.id, a.name, a.imageUrl, a.source, wasExcluded.has(a.id)]);
+}
+await c.query("commit");
+} catch (e) {
+await c.query("rollback");
+throw e;
+} finally {
+c.release();
+}
+}
+async function setArtistExcluded(memberId: string, artistId: string, excluded: boolean): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`update tracked_artists set excluded=$3 where member_id=$1 and artist_id=$2`, [memberId, artistId, excluded]);
+}
+
+async function listShortlist(memberId: string): Promise<ShortlistItem[]> {
+if (!hasDb) return [];
+await ready();
+const r = await db().query(`select id,member_id,month,title,artist,release_date,art_url,spotify_url,source,added_at from shortlist where member_id=$1 order by added_at asc`, [memberId]);
+return r.rows.map((x) => ({
+id: x.id, memberId: x.member_id, month: x.month, title: x.title, artist: x.artist,
+releaseDate: x.release_date, artUrl: x.art_url, spotifyUrl: x.spotify_url, source: x.source,
+addedAt: new Date(x.added_at).toISOString(),
+}));
+}
+async function addShortlist(item: ShortlistItem): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`insert into shortlist (id,member_id,month,title,artist,release_date,art_url,spotify_url,source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (id) do nothing`,
+[item.id, item.memberId, item.month, item.title, item.artist, item.releaseDate, item.artUrl, item.spotifyUrl, item.source]);
+}
+async function deleteShortlist(memberId: string, id: string): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`delete from shortlist where member_id=$1 and id=$2`, [memberId, id]);
+}
+
+/* Spotify tokens live here rather than in the browser, so a member's scan works
+   from any device. Refreshing is done server-side and the fresh access token is
+   handed to the client, which does the scanning itself (hundreds of paged calls
+   would blow a serverless timeout). */
+const SPOTIFY_CLIENT_ID = "857748a5334f4c79bdef21da5050714a";
+
+async function spotifyAccessToken(memberId: string): Promise<string | null> {
+const a = await getAccount(memberId);
+if (!a) return null;
+const stillGood = a.accessToken && a.expiresAt && new Date(a.expiresAt).getTime() - 60000 > Date.now();
+if (stillGood) return a.accessToken;
+if (!a.refreshToken) return null;
+const res = await fetch("https://accounts.spotify.com/api/token", {
+method: "POST",
+headers: { "content-type": "application/x-www-form-urlencoded" },
+body: new URLSearchParams({
+grant_type: "refresh_token", refresh_token: a.refreshToken,
+client_id: a.clientId || SPOTIFY_CLIENT_ID,
+}),
+signal: AbortSignal.timeout(12000),
+});
+if (!res.ok) throw new Error("Spotify needs reconnecting");
+const d = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
+if (!d.access_token) throw new Error("Spotify needs reconnecting");
+await saveAccount({
+memberId, service: "spotify", accessToken: d.access_token,
+refreshToken: d.refresh_token ?? a.refreshToken,
+expiresAt: new Date(Date.now() + (d.expires_in ?? 3600) * 1000).toISOString(),
+clientId: a.clientId || SPOTIFY_CLIENT_ID, scannedAt: a.scannedAt,
+});
+return d.access_token;
 }
 
 /* ---- session ---- */
@@ -353,6 +489,32 @@ warning: "Couldn't reach the album lookup — you can still type it in by hand."
 }
 }
 
+if (r === "upcoming") {
+const auth = await requireMember();
+if (!auth.ok) return auth.res;
+const [account, artists, shortlist] = await Promise.all([
+getAccount(auth.memberId), listTrackedArtists(auth.memberId), listShortlist(auth.memberId),
+]);
+return J({
+ok: true,
+connected: Boolean(account?.refreshToken ?? account?.accessToken),
+service: account?.service ?? null, scannedAt: account?.scannedAt ?? null,
+artists, shortlist,
+});
+}
+
+if (r === "spotify") {
+const auth = await requireMember();
+if (!auth.ok) return auth.res;
+try {
+const token = await spotifyAccessToken(auth.memberId);
+if (!token) return J({ ok: false, connected: false });
+return J({ ok: true, connected: true, accessToken: token, clientId: SPOTIFY_CLIENT_ID });
+} catch (err) {
+return J({ ok: false, connected: false, message: err instanceof Error ? err.message : "Spotify needs reconnecting" });
+}
+}
+
 if (r === "export") {
 const session = await readSession();
 if (!session.authed) return bad("Not signed in", 401);
@@ -446,6 +608,69 @@ return res;
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
 
+if (r === "spotify") {
+const accessToken = str(b.accessToken);
+if (!accessToken) return bad("Missing access token");
+const expiresIn = Number(b.expiresIn);
+await saveAccount({
+memberId: auth.memberId, service: "spotify", accessToken,
+refreshToken: str(b.refreshToken),
+expiresAt: new Date(Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000).toISOString(),
+clientId: str(b.clientId) ?? SPOTIFY_CLIENT_ID, scannedAt: null,
+});
+return J({ ok: true });
+}
+
+if (r === "upcoming") {
+const raw = Array.isArray(b.artists) ? (b.artists as Record<string, unknown>[]) : [];
+const seen = new Set<string>();
+const artists: TrackedArtist[] = [];
+for (const x of raw) {
+const id = str(x.id);
+const name = str(x.name);
+if (!id || !name || seen.has(id)) continue;
+seen.add(id);
+artists.push({ id, name, imageUrl: str(x.imageUrl), source: str(x.source) ?? "spotify", excluded: false });
+}
+if (!artists.length) return bad("No artists to save");
+await replaceTrackedArtists(auth.memberId, artists);
+await markScanned(auth.memberId);
+return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
+}
+
+if (r === "shortlist") {
+/* Promoting turns a shortlisted release into this member's pick for the month. */
+const promote = str(b.promote);
+if (promote) {
+const item = (await listShortlist(auth.memberId)).find((x) => x.id === promote);
+if (!item) return bad("Not on your shortlist", 404);
+const month = str(b.month) ?? item.month;
+if (!MONTH_RE.test(month)) return bad("Bad month");
+const year = item.releaseDate ? Number(item.releaseDate.slice(0, 4)) : NaN;
+const album: Album = {
+id: newId("alb"), month, title: item.title, artist: item.artist,
+year: Number.isFinite(year) && year > 1900 ? year : null,
+chosenBy: auth.memberId, artUrl: item.artUrl, spotifyUrl: item.spotifyUrl,
+ytmUrl: null, appleUrl: null, tracks: [], createdAt: new Date().toISOString(),
+};
+await saveAlbum(album);
+await deleteShortlist(auth.memberId, item.id);
+return J({ ok: true, album });
+}
+const title = str(b.title);
+const artist = str(b.artist);
+if (!title || !artist) return bad("Needs a title and an artist");
+const month = str(b.month) ?? currentMonth();
+if (!MONTH_RE.test(month)) return bad("Bad month");
+const item: ShortlistItem = {
+id: str(b.id) ?? newId("sl"), memberId: auth.memberId, month, title, artist,
+releaseDate: str(b.releaseDate), artUrl: str(b.artUrl), spotifyUrl: str(b.spotifyUrl),
+source: str(b.source), addedAt: new Date().toISOString(),
+};
+await addShortlist(item);
+return J({ ok: true, shortlist: await listShortlist(auth.memberId) });
+}
+
 if (r === "albums") {
 const title = str(b.title);
 const artist = str(b.artist);
@@ -516,10 +741,17 @@ return J({ ok: true, rating });
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
-if ((await route(ctx)) !== "albums") return bad("Not found", 404);
+const rr = await route(ctx);
+if (rr !== "albums" && rr !== "upcoming") return bad("Not found", 404);
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
 const b = await req.json().catch(() => ({}) as Record<string, unknown>);
+if (rr === "upcoming") {
+const artistId = str(b.artistId);
+if (!artistId) return bad("Missing artist id");
+await setArtistExcluded(auth.memberId, artistId, Boolean(b.excluded));
+return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
+}
 const id = str(b.id);
 if (!id) return bad("Missing album id");
 const ex = (await listAlbums()).find((a) => a.id === id);
@@ -553,8 +785,19 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 const r = await route(ctx);
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
+
+if (r === "spotify") {
+await deleteAccount(auth.memberId);
+return J({ ok: true });
+}
+
 const id = req.nextUrl.searchParams.get("id");
 if (!id) return bad("Missing id");
+
+if (r === "shortlist") {
+await deleteShortlist(auth.memberId, id);
+return J({ ok: true, shortlist: await listShortlist(auth.memberId) });
+}
 
 if (r === "albums") {
 await deleteAlbum(id);

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fallbackArt } from "./lib/art";
+import Upcoming from "./upcoming";
 
 /* ------------------------------ types ------------------------------ */
 
@@ -19,7 +21,7 @@ ok: true; mode: "live" | "preview"; me: string | null; members: Member[];
 albums: Album[]; ratings: Rating[]; clubName: string; currentMonth: string;
 };
 type Wire = State | { ok: false; needsSetup?: boolean; dbError?: boolean; message?: string };
-type Tab = "month" | "archive" | "table" | "club";
+type Tab = "month" | "upcoming" | "archive" | "table" | "club";
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -41,12 +43,6 @@ const q = (a: Album) => `${a.artist} ${a.title}`.trim();
 const spotify = (a: Album) => a.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(q(a))}/albums`;
 const ytm = (a: Album) => a.ytmUrl || `https://music.youtube.com/search?q=${encodeURIComponent(q(a))}`;
 const fmt = (n: number | null | undefined) => (n === null || n === undefined ? "—" : n.toFixed(1));
-
-function fallbackArt(seed: string) {
-let h = 0;
-for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-return `linear-gradient(145deg, hsl(${h} 34% 24%), hsl(${(h + 48) % 360} 40% 13%))`;
-}
 
 type Stats = { visible: Rating[]; avg: number | null; scoredCount: number; total: number };
 function albumStats(album: Album, ratings: Rating[], total: number): Stats {
@@ -867,7 +863,9 @@ onDone();
 
 export default function Page() {
 const [wire, setWire] = useState<Wire | null>(null);
-const [tab, setTab] = useState<Tab>("month");
+const [tab, setTab] = useState<Tab>(() =>
+typeof window !== "undefined" && new URLSearchParams(window.location.search).has("code") ? "upcoming" : "month",
+);
 const [cursor, setCursor] = useState(thisMonth());
 const [modal, setModal] = useState<{ open: boolean; album: Album | null }>({ open: false, album: null });
 
@@ -923,7 +921,7 @@ return (
 {state.clubName.replace(/\s*club\s*$/i, "")}<span className="dot"> Club</span>
 </div>
 <nav className="tabs" role="tablist">
-{([["month", "This month"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"]] as [Tab, string][]).map(
+{([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"]] as [Tab, string][]).map(
 ([id, text]) => (
 <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{text}</button>
 ),
@@ -994,6 +992,10 @@ me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al 
 ))
 )}
 </>
+)}
+
+{tab === "upcoming" && (
+<Upcoming currentMonth={state.currentMonth} onPicked={() => { load(); setTab("month"); }} />
 )}
 
 {tab === "archive" && (

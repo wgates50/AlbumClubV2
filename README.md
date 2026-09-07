@@ -63,12 +63,18 @@ Worth pulling a copy every few months and dropping it somewhere safe.
 ```
 app/
   layout.tsx            shell, fonts and the design system (styles are inline)
-  page.tsx              the entire UI (one client component)
+  page.tsx              the club UI (one client component)
+  upcoming.tsx          the Upcoming tab
+  lib/spotify.ts        PKCE sign-in and the Spotify scan
+  lib/musicbrainz.ts    announced records Spotify doesn't list yet
+  lib/art.ts            the gradient sleeve fallback
   api/[action]/route.ts every endpoint, plus Postgres access and schema
 ```
 
 **Data model.** `members`, `albums` (with `month` as `YYYY-MM`), `ratings` (one row
-per member per album) and a `settings` key/value table. Tables are created on first
+per member per album) and a `settings` key/value table. Upcoming adds three more,
+all keyed by member: `music_accounts` (the Spotify connection), `tracked_artists`
+and `shortlist`. Tables are created on first
 connection — `init()` in `app/api/[action]/route.ts`.
 
 **Auth.** There is none. Anyone who can reach the URL can read and write, so the
@@ -79,6 +85,36 @@ is what marks first-run setup as done.
 
 If you later want it closed off, the tidiest route is Vercel's own access protection
 in front of the whole deployment, rather than putting a passcode back in the app.
+
+---
+
+## Upcoming
+
+*Upcoming* is each member's own tab. Connect Spotify and it reads the artists you
+follow and play most, then lists what they have out or announced — Spotify for
+what it knows about, MusicBrainz for records that are announced but not on
+Spotify yet.
+
+Your artists, your shortlist and your connection are yours; nobody else in the
+club sees them. **Refresh** re-checks for new releases using the artists already
+on file, which is also what happens when you open the tab. **Rescan library**
+re-reads who you follow on Spotify. Muting an artist hides their releases without
+forgetting them, and a mute survives a rescan.
+
+**Shortlist** is the bridge to the rest of the club. Anything coming out can be
+added to a month's shortlist, and *Make this my pick* turns one into your actual
+album for that month, carrying the artwork and the Spotify link across.
+
+**Connecting Spotify** needs the deployment's own URL in the Spotify app's
+redirect allowlist — `https://your-app.vercel.app`, exactly, no trailing slash.
+Without it Spotify refuses the sign-in with `INVALID_CLIENT`.
+
+Tokens are held in `music_accounts` and refreshed server-side, so the tab works
+from any device. Since the club has no passcode, anyone with the link can pick
+any name and use that member's connection — put Vercel access protection in
+front of the deployment if that matters to you.
+
+---
 
 **Artwork** is stored as a URL from Apple's CDN rather than a copy of the image. If
 a URL ever dies, the sleeve falls back to a generated gradient built from the artist
