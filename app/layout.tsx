@@ -524,7 +524,7 @@ input[type="range"]::-moz-range-thumb {
   display: flex;
   justify-content: space-between;
   font-size: 10px;
-  color: var(--muted-2);
+  color: var(--muted);
   letter-spacing: 0.08em;
   margin-top: -2px;
 }
@@ -840,7 +840,7 @@ label.field > span {
 .rank {
   font-family: var(--font-display);
   font-size: 22px;
-  color: var(--muted-2);
+  color: var(--muted);
   width: 34px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1236,15 +1236,23 @@ label.field > span {
 /* ---- one album at a time ---- */
 .album-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 26px; scrollbar-width: none; }
 .album-tabs::-webkit-scrollbar { display: none; }
-.album-tab { flex: none; display: flex; align-items: center; gap: 10px; cursor: pointer; text-align: left;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 15px; max-width: 260px; transition: border-color 0.18s var(--ease), background 0.18s var(--ease); }
-.album-tab:hover { border-color: var(--muted-2); }
-.album-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
-.album-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--line); }
-.album-tab-dot.done { background: var(--accent); }
-.album-tab-text { min-width: 0; display: flex; flex-direction: column; }
-.album-tab-title { font-family: var(--font-display); font-size: 16px; line-height: 1.25;
+/* A button does not inherit colour, so this has to be stated — leaving it off
+   fell back to the UA's black on a near-black ground. */
+.album-tab { flex: none; display: flex; align-items: center; gap: 11px; cursor: pointer; text-align: left;
+  color: var(--text-dim); font-family: var(--font-ui);
+  background: var(--surface); border: 1px solid var(--line); border-left-width: 2px;
+  border-radius: var(--radius); padding: 11px 16px; max-width: 260px;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease); }
+.album-tab:hover { color: var(--text); border-color: var(--muted-2); }
+.album-tab[aria-selected="true"] { color: var(--text); background: var(--accent-soft);
+  border-color: rgba(224, 178, 92, 0.34); border-left-color: var(--accent); }
+/* Hollow until you have scored or skipped it, so "not done" is a visible state
+   rather than an absent one. */
+.album-tab-dot { width: 7px; height: 7px; border-radius: 50%; flex: none;
+  border: 1px solid var(--muted-2); box-sizing: border-box; }
+.album-tab-dot.done { background: var(--accent); border-color: var(--accent); }
+.album-tab-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.album-tab-title { font-family: var(--font-display); font-size: 17px; line-height: 1.2; color: inherit;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-tab-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -584,7 +584,7 @@ onKeyDown={(e) => e.key === "Enter" && setOpen(isOpen ? null : a.id)}>
 {a.artist}{a.year ? ` · ${a.year}` : ""}{chooser ? ` · ${chooser.name}'s pick` : ""}
 </div>
 </div>
-<div className="avg">{fmt(s.avg)}<small>{i === 0 && s.avg !== null ? "winner" : "average"}</small></div>
+<div className="avg">{fmt(s.avg)}{s.avg !== null && <small>{i === 0 ? "winner" : "average"}</small>}</div>
 </div>
 {isOpen && (
 <div className="expanded">
