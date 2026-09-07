@@ -790,14 +790,19 @@ label.field > span {
   background: rgba(255, 255, 255, 0.017);
 }
 
-.row .thumb {
-  width: 62px;
-  height: 62px;
+.thumb {
   border-radius: 2px;
   overflow: hidden;
   background: var(--surface-2);
   position: relative;
   flex: none;
+}
+
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.row .thumb {
+  width: 62px;
+  height: 62px;
 }
 
 .row .thumb img {
@@ -1090,6 +1095,8 @@ label.field > span {
   .month-meta .right { margin-left: 0; width: 100%; justify-content: center; }
   .up-row-actions { padding-left: 0; }
   .up-connect h2 { font-size: 32px; }
+  .wall { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 14px; }
+  .album-glow { left: -16px; right: -16px; height: 300px; }
   .admin-row { grid-template-columns: 1fr; }
   .admin-row textarea { grid-column: 1; }
   .admin-album { flex-direction: column; }
@@ -1232,6 +1239,52 @@ label.field > span {
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .art-missed { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+/* ---- artwork in the interface ---- */
+
+/* The sleeve, enlarged and blurred behind the album header. Masked so it fades
+   out before the panels rather than stopping at an edge. */
+.album { position: relative; }
+.album > *:not(.album-glow) { position: relative; z-index: 1; }
+.album-glow {
+  position: absolute; top: -60px; left: -80px; right: -80px; height: 520px;
+  overflow: hidden; pointer-events: none; z-index: 0;
+  /* closest-side reaches full transparency at every edge, so the wash has no
+     boundary of its own — it just stops existing. */
+  -webkit-mask-image: radial-gradient(ellipse closest-side at 50% 40%, #000 0%, rgba(0,0,0,0.5) 52%, transparent 100%);
+  mask-image: radial-gradient(ellipse closest-side at 50% 40%, #000 0%, rgba(0,0,0,0.5) 52%, transparent 100%);
+}
+.album-glow img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  filter: blur(64px) saturate(1.4); opacity: 0.38; transform: scale(1.3);
+}
+
+.album-tab .thumb { width: 34px; height: 34px; }
+
+/* ---- the archive as a wall of sleeves ---- */
+.arch-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 20px; }
+.wall-item {
+  display: flex; flex-direction: column; gap: 9px; cursor: pointer; text-align: left;
+  background: none; border: 0; padding: 0; color: var(--text-dim); position: relative;
+  transition: color 0.18s var(--ease);
+}
+.wall-item:hover, .wall-item[aria-selected="true"] { color: var(--text); }
+.cover { width: 100%; aspect-ratio: 1; border-radius: 2px; overflow: hidden; background: var(--surface-2); }
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wall-item .cover { transition: transform 0.22s var(--ease), outline-color 0.18s var(--ease); outline: 2px solid transparent; }
+.wall-item:hover .cover { transform: translateY(-3px); }
+.wall-item[aria-selected="true"] .cover { outline-color: var(--accent); outline-offset: 3px; }
+.wall-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wall-title { font-family: var(--font-display); font-size: 16px; line-height: 1.2; color: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wall-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wall-avg { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; gap: 5px;
+  font-family: var(--font-display); font-size: 17px; color: var(--text);
+  background: rgba(11, 10, 9, 0.72); backdrop-filter: blur(6px);
+  border-radius: 999px; padding: 3px 10px; }
+.wall-crown { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.wall-detail { margin-top: 24px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 7px; width: 100%; padding: 12px 0 4px; }
 .swatch { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; padding: 0;
   border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line) inset;

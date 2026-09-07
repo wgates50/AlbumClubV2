@@ -116,6 +116,29 @@ return (
 );
 }
 
+/* The sleeve, blown up and blurred, sitting behind the album header. No canvas
+   and no CORS involved — just an img with a filter — so it works whatever the
+   artwork host sends back, and simply doesn't render when there is no art. */
+function Glow({ album }: { album: Album }) {
+const [broken, setBroken] = useState(false);
+if (!album.artUrl || broken) return null;
+return (
+<div className="album-glow" aria-hidden="true">
+<img src={album.artUrl} alt="" onError={() => setBroken(true)} />
+</div>
+);
+}
+
+function Cover({ album }: { album: Album }) {
+const [broken, setBroken] = useState(false);
+const show = Boolean(album.artUrl) && !broken;
+return (
+<div className="cover" style={show ? undefined : { background: fallbackArt(album.artist + album.title) }}>
+{show && <img src={album.artUrl!} alt="" loading="lazy" onError={() => setBroken(true)} />}
+</div>
+);
+}
+
 function Thumb({ album, size = 62 }: { album: Album; size?: number }) {
 const [broken, setBroken] = useState(false);
 const showArt = Boolean(album.artUrl) && !broken;
@@ -224,6 +247,7 @@ const unpicked = album.tracks.filter((t) => !favs.includes(t));
 
 return (
 <article className="album" style={accentVars(pickedBy?.color)}>
+<Glow album={album} />
 <div className="album-top">
 <Sleeve album={album} />
 <div>
@@ -550,6 +574,7 @@ function Archive({ albums, members, ratings, currentMonth }: {
 albums: Album[]; members: Member[]; ratings: Rating[]; currentMonth: string;
 }) {
 const [open, setOpen] = useState<string | null>(null);
+const [view, setView] = useState<"rows" | "wall">("rows");
 const past = albums.filter((a) => a.month < currentMonth);
 const months = Array.from(new Set(past.map((a) => a.month))).sort((a, b) => (a < b ? 1 : -1));
 
@@ -563,6 +588,15 @@ return (
 
 return (
 <div className="pt34">
+<div className="arch-head">
+<div className="up-views">
+{(["rows", "wall"] as const).map((v) => (
+<button key={v} className="up-view" aria-selected={view === v} onClick={() => setView(v)}>
+{v === "rows" ? "List" : "Sleeves"}
+</button>
+))}
+</div>
+</div>
 {months.map((m) => {
 const l = monthLabel(m);
 const list = past.filter((a) => a.month === m)
@@ -571,6 +605,46 @@ const list = past.filter((a) => a.month === m)
 return (
 <section className="month-block" key={m}>
 <h3>{l.name} <span className="dim">{l.year}</span></h3>
+{view === "wall" ? (
+<>
+<div className="wall">
+{list.map(({ a, s }, i) => {
+const chooser = members.find((x) => x.id === a.chosenBy);
+return (
+<button className="wall-item" key={a.id} aria-selected={open === a.id}
+style={accentVars(chooser?.color)}
+onClick={() => setOpen(open === a.id ? null : a.id)}>
+<Cover album={a} />
+<span className="wall-meta">
+<span className="wall-title">{a.title}</span>
+<span className="wall-sub">{a.artist}</span>
+</span>
+{s.avg !== null && <span className="wall-avg">{fmt(s.avg)}{i === 0 && <i className="wall-crown" title="Month's best" />}</span>}
+</button>
+);
+})}
+</div>
+{(() => {
+const picked = list.find(({ a }) => a.id === open);
+if (!picked) return null;
+const { a, s } = picked;
+return (
+<div className="expanded wall-detail">
+<div className="mb16"><ListenRow album={a} /></div>
+{s.visible.filter((r) => r.score !== null || r.review).length === 0 ? (
+<p className="muted">No verdicts were recorded for this one.</p>
+) : (
+members.map((mem) => {
+const r = s.visible.find((x) => x.memberId === mem.id);
+if (!r || (r.score === null && !r.review)) return null;
+return <Take key={mem.id} member={mem} r={r} />;
+})
+)}
+</div>
+);
+})()}
+</>
+) : (
 <div className="rows">
 {list.map(({ a, s }, i) => {
 const chooser = members.find((x) => x.id === a.chosenBy);
@@ -607,6 +681,7 @@ return <Take key={mem.id} member={mem} r={r} />;
 );
 })}
 </div>
+)}
 </section>
 );
 })}
@@ -1121,6 +1196,7 @@ return (
 style={accentVars(state.members.find((m) => m.id === a.chosenBy)?.color)}
 onClick={() => setOpenAlbum(a.id)}>
 <span className={`album-tab-dot${done ? " done" : ""}`} aria-hidden="true" />
+<Thumb album={a} size={34} />
 <span className="album-tab-text">
 <span className="album-tab-title">{a.title}</span>
 <span className="album-tab-sub">{a.artist}</span>
