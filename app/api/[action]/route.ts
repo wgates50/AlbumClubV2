@@ -53,6 +53,8 @@ await p.query(`create table if not exists music_accounts (member_id text primary
 await p.query(`create table if not exists tracked_artists (member_id text not null, artist_id text not null, name text not null, image_url text, source text not null default 'spotify', excluded boolean not null default false, updated_at timestamptz not null default now(), primary key (member_id, artist_id))`);
 await p.query(`create table if not exists shortlist (id text primary key, member_id text not null, month text not null, title text not null, artist text not null, release_date text, art_url text, spotify_url text, source text, added_at timestamptz not null default now())`);
 await p.query(`create index if not exists shortlist_member_month_idx on shortlist(member_id, month)`);
+/* Added after the table shipped, so it has to be an alter rather than part of the create. */
+await p.query(`alter table music_accounts add column if not exists playlist_ids text not null default '[]'`);
 }
 
 function parseList(raw: unknown): string[] {
@@ -185,7 +187,7 @@ await db().query(`insert into ratings (album_id,member_id,score,review,fav_track
 
 type Account = {
 memberId: string; service: string; accessToken: string | null; refreshToken: string | null;
-expiresAt: string | null; clientId: string | null; scannedAt: string | null;
+expiresAt: string | null; clientId: string | null; scannedAt: string | null; playlistIds: string[];
 };
 type TrackedArtist = { id: string; name: string; imageUrl: string | null; source: string; excluded: boolean };
 type ShortlistItem = {
@@ -196,26 +198,32 @@ releaseDate: string | null; artUrl: string | null; spotifyUrl: string | null; so
 async function getAccount(memberId: string): Promise<Account | null> {
 if (!hasDb) return null;
 await ready();
-const r = await db().query(`select member_id,service,access_token,refresh_token,expires_at,client_id,scanned_at from music_accounts where member_id=$1`, [memberId]);
+const r = await db().query(`select member_id,service,access_token,refresh_token,expires_at,client_id,scanned_at,playlist_ids from music_accounts where member_id=$1`, [memberId]);
 const x = r.rows[0];
 if (!x) return null;
 return {
 memberId: x.member_id, service: x.service, accessToken: x.access_token, refreshToken: x.refresh_token,
 expiresAt: x.expires_at ? new Date(x.expires_at).toISOString() : null,
 clientId: x.client_id, scannedAt: x.scanned_at ? new Date(x.scanned_at).toISOString() : null,
+playlistIds: parseList(x.playlist_ids),
 };
 }
 async function saveAccount(a: Account): Promise<void> {
 if (!hasDb) return;
 await ready();
-await db().query(`insert into music_accounts (member_id,service,access_token,refresh_token,expires_at,client_id) values ($1,$2,$3,$4,$5,$6) on conflict (member_id) do update set service=excluded.service, access_token=excluded.access_token, refresh_token=coalesce(excluded.refresh_token, music_accounts.refresh_token), expires_at=excluded.expires_at, client_id=excluded.client_id`,
-[a.memberId, a.service, a.accessToken, a.refreshToken, a.expiresAt, a.clientId]);
+await db().query(`insert into music_accounts (member_id,service,access_token,refresh_token,expires_at,client_id,playlist_ids) values ($1,$2,$3,$4,$5,$6,$7) on conflict (member_id) do update set service=excluded.service, access_token=excluded.access_token, refresh_token=coalesce(excluded.refresh_token, music_accounts.refresh_token), expires_at=excluded.expires_at, client_id=excluded.client_id`,
+[a.memberId, a.service, a.accessToken, a.refreshToken, a.expiresAt, a.clientId, JSON.stringify(a.playlistIds ?? [])]);
 }
 async function deleteAccount(memberId: string): Promise<void> {
 if (!hasDb) return;
 await ready();
 await db().query(`delete from music_accounts where member_id=$1`, [memberId]);
 await db().query(`delete from tracked_artists where member_id=$1`, [memberId]);
+}
+async function savePlaylistIds(memberId: string, ids: string[]): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`update music_accounts set playlist_ids=$2 where member_id=$1`, [memberId, JSON.stringify(ids)]);
 }
 async function markScanned(memberId: string): Promise<void> {
 if (!hasDb) return;
@@ -283,7 +291,7 @@ await db().query(`delete from shortlist where member_id=$1 and id=$2`, [memberId
    from any device. Refreshing is done server-side and the fresh access token is
    handed to the client, which does the scanning itself (hundreds of paged calls
    would blow a serverless timeout). */
-const SPOTIFY_CLIENT_ID = "857748a5334f4c79bdef21da5050714a";
+const SPOTIFY_CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || "857748a5334f4c79bdef21da5050714a";
 
 async function spotifyAccessToken(memberId: string): Promise<string | null> {
 const a = await getAccount(memberId);
@@ -307,9 +315,49 @@ await saveAccount({
 memberId, service: "spotify", accessToken: d.access_token,
 refreshToken: d.refresh_token ?? a.refreshToken,
 expiresAt: new Date(Date.now() + (d.expires_in ?? 3600) * 1000).toISOString(),
-clientId: a.clientId || SPOTIFY_CLIENT_ID, scannedAt: a.scannedAt,
+clientId: a.clientId || SPOTIFY_CLIENT_ID, scannedAt: a.scannedAt, playlistIds: a.playlistIds,
 });
 return d.access_token;
+}
+
+/* YouTube. Google requires a client secret even for a browser PKCE flow, so the
+   code exchange and every refresh happen here — the secret is server-only and
+   never reaches the bundle. Asking for offline access gets us a refresh token,
+   which the original app went without. */
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+
+async function googleTokenRequest(body: Record<string, string>) {
+const res = await fetch(GOOGLE_TOKEN_URL, {
+method: "POST",
+headers: { "content-type": "application/x-www-form-urlencoded" },
+body: new URLSearchParams({ ...body, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET }),
+signal: AbortSignal.timeout(12000),
+});
+const d = (await res.json().catch(() => ({}))) as {
+access_token?: string; refresh_token?: string; expires_in?: number; error_description?: string; error?: string;
+};
+if (!res.ok || !d.access_token) {
+throw new Error(d.error_description || d.error || "Google wouldn't complete the sign-in");
+}
+return d;
+}
+
+async function youtubeAccessToken(memberId: string): Promise<string | null> {
+const a = await getAccount(memberId);
+if (!a || a.service !== "youtube") return null;
+const stillGood = a.accessToken && a.expiresAt && new Date(a.expiresAt).getTime() - 60000 > Date.now();
+if (stillGood) return a.accessToken;
+if (!a.refreshToken) return null;
+const d = await googleTokenRequest({ grant_type: "refresh_token", refresh_token: a.refreshToken });
+await saveAccount({
+memberId, service: "youtube", accessToken: d.access_token ?? null,
+refreshToken: d.refresh_token ?? a.refreshToken,
+expiresAt: new Date(Date.now() + (d.expires_in ?? 3600) * 1000).toISOString(),
+clientId: GOOGLE_CLIENT_ID, scannedAt: a.scannedAt, playlistIds: a.playlistIds,
+});
+return d.access_token ?? null;
 }
 
 /* ---- session ---- */
@@ -499,6 +547,7 @@ return J({
 ok: true,
 connected: Boolean(account?.refreshToken ?? account?.accessToken),
 service: account?.service ?? null, scannedAt: account?.scannedAt ?? null,
+playlistIds: account?.playlistIds ?? [],
 artists, shortlist,
 });
 }
@@ -512,6 +561,21 @@ if (!token) return J({ ok: false, connected: false });
 return J({ ok: true, connected: true, accessToken: token, clientId: SPOTIFY_CLIENT_ID });
 } catch (err) {
 return J({ ok: false, connected: false, message: err instanceof Error ? err.message : "Spotify needs reconnecting" });
+}
+}
+
+if (r === "youtube") {
+const auth = await requireMember();
+if (!auth.ok) return auth.res;
+if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+return J({ ok: false, connected: false, unconfigured: true, message: "YouTube isn't set up on this deployment yet." });
+}
+try {
+const token = await youtubeAccessToken(auth.memberId);
+if (!token) return J({ ok: false, connected: false });
+return J({ ok: true, connected: true, accessToken: token });
+} catch (err) {
+return J({ ok: false, connected: false, message: err instanceof Error ? err.message : "YouTube needs reconnecting" });
 }
 }
 
@@ -616,9 +680,33 @@ await saveAccount({
 memberId: auth.memberId, service: "spotify", accessToken,
 refreshToken: str(b.refreshToken),
 expiresAt: new Date(Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000).toISOString(),
-clientId: str(b.clientId) ?? SPOTIFY_CLIENT_ID, scannedAt: null,
+clientId: str(b.clientId) ?? SPOTIFY_CLIENT_ID, scannedAt: null, playlistIds: [],
 });
 return J({ ok: true });
+}
+
+if (r === "youtube") {
+if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+return bad("YouTube isn't set up on this deployment — GOOGLE_CLIENT_SECRET and NEXT_PUBLIC_GOOGLE_CLIENT_ID are missing.", 501);
+}
+const code = str(b.code);
+const verifier = str(b.codeVerifier);
+const redirect = str(b.redirectUri);
+if (!code || !verifier || !redirect) return bad("Missing sign-in details");
+try {
+const d = await googleTokenRequest({
+grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: redirect,
+});
+await saveAccount({
+memberId: auth.memberId, service: "youtube", accessToken: d.access_token ?? null,
+refreshToken: d.refresh_token ?? null,
+expiresAt: new Date(Date.now() + (d.expires_in ?? 3600) * 1000).toISOString(),
+clientId: GOOGLE_CLIENT_ID, scannedAt: null, playlistIds: [],
+});
+return J({ ok: true });
+} catch (err) {
+return bad(err instanceof Error ? err.message : "Google sign-in failed", 400);
+}
 }
 
 if (r === "upcoming") {
@@ -633,6 +721,9 @@ seen.add(id);
 artists.push({ id, name, imageUrl: str(x.imageUrl), source: str(x.source) ?? "spotify", excluded: false });
 }
 if (!artists.length) return bad("No artists to save");
+if (Array.isArray(b.playlistIds)) {
+await savePlaylistIds(auth.memberId, (b.playlistIds as unknown[]).map(String));
+}
 await replaceTrackedArtists(auth.memberId, artists);
 await markScanned(auth.memberId);
 return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
@@ -786,7 +877,7 @@ const r = await route(ctx);
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
 
-if (r === "spotify") {
+if (r === "spotify" || r === "youtube") {
 await deleteAccount(auth.memberId);
 return J({ ok: true });
 }

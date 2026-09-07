@@ -1181,6 +1181,16 @@ label.field > span {
 .up-artist-name { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-artist-row.muted-row { opacity: 0.42; }
 .up-disconnect { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line); }
+.up-help { margin-top: 22px; }
+.up-help .muted { margin: 10px 0; line-height: 1.6; }
+.up-uri { display: block; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); color: var(--accent); user-select: all; }
+.up-picker { max-width: 560px; }
+.up-picker .up-artist-row { cursor: pointer; }
+.up-picker input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+.up-stats { display: flex; gap: 22px; margin-bottom: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+.up-stats b { color: var(--text); font-family: var(--font-display); font-size: 17px; margin-right: 5px; font-weight: 400; }
+.up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
+.mb16 { margin-bottom: 16px; }
 
 @media (max-width: 700px) {
   .grid3 { grid-template-columns: 1fr; }

@@ -9,7 +9,8 @@ const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const API_BASE = "https://api.spotify.com/v1";
 const SCOPES = "user-follow-read user-top-read playlist-read-private user-library-read";
 
-export const DEFAULT_CLIENT_ID = "857748a5334f4c79bdef21da5050714a";
+export const DEFAULT_CLIENT_ID =
+  process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || "857748a5334f4c79bdef21da5050714a";
 
 export type SpotifyArtist = { id: string; name: string; imageUrl: string | null; source: string };
 export type Release = {
@@ -38,8 +39,14 @@ function base64url(buffer: ArrayBuffer): string {
   bytes.forEach((b) => (str += String.fromCharCode(b)));
   return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-/* Spotify matches this against the app's allowlist character for character. */
+/* Spotify matches this against the app's allowlist character for character —
+   a trailing slash or the wrong Vercel alias is enough to be turned away. The
+   deployment can be opened on several hostnames, so NEXT_PUBLIC_SPOTIFY_REDIRECT_URI
+   pins it to the one string actually registered; without it we fall back to
+   wherever the page happens to be served from. */
 export function redirectUri(): string {
+  const pinned = process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI;
+  if (pinned) return pinned.trim();
   const origin = window.location.origin;
   return origin.includes("localhost") ? origin.replace("://localhost", "://127.0.0.1") : origin;
 }
@@ -155,12 +162,99 @@ export async function fetchFollowedArtists(onProgress?: (m: string) => void): Pr
   }
 
   onProgress?.("Reading your most-played artists…");
-  for (const range of ["short_term", "medium_term", "long_term"]) {
+  for (const range of ["short_term", "medium_term"]) {
     const d = await api<{ items: RawArtist[] }>(token, `/me/top/artists?limit=50&time_range=${range}`);
     for (const a of d.items) found.set(a.id, toArtist(a));
   }
 
   return Array.from(found.values());
+}
+
+export const LIKED_SONGS_ID = "__liked_songs__";
+export type Playlist = { id: string; name: string; image: string; trackCount: number; owner: string };
+
+export async function fetchPlaylists(): Promise<Playlist[]> {
+  const token = await serverToken();
+  const out: Playlist[] = [];
+
+  /* Liked Songs isn't a playlist as far as the API is concerned, so it is
+     fetched separately and pinned to the top. Needs user-library-read, which
+     the user can decline — hence the catch. */
+  let liked: Playlist | null = null;
+  try {
+    const d = await api<{ total?: number }>(token, "/me/tracks?limit=1");
+    liked = { id: LIKED_SONGS_ID, name: "Liked Songs", image: "", trackCount: d.total ?? 0, owner: "You" };
+  } catch {
+    /* scope not granted */
+  }
+
+  let url: string | null = "/me/playlists?limit=50";
+  while (url) {
+    const d: {
+      items: ({ id: string; name: string; images?: { url: string }[]; tracks?: { total?: number }; owner?: { display_name?: string } } | null)[];
+      next?: string | null;
+    } = await api(token, url);
+    for (const item of d.items) {
+      if (!item) continue;
+      out.push({
+        id: item.id, name: item.name, image: item.images?.[0]?.url ?? "",
+        trackCount: item.tracks?.total ?? 0, owner: item.owner?.display_name ?? "",
+      });
+    }
+    if (d.next) {
+      const next = new URL(d.next);
+      url = next.pathname.replace("/v1", "") + next.search;
+    } else url = null;
+  }
+  return liked ? [liked, ...out] : out;
+}
+
+export async function fetchArtistsFromPlaylists(
+  playlistIds: string[],
+  onProgress?: (m: string) => void,
+): Promise<SpotifyArtist[]> {
+  const token = await serverToken();
+  const ids = new Set<string>();
+
+  for (let i = 0; i < playlistIds.length; i++) {
+    const isLiked = playlistIds[i] === LIKED_SONGS_ID;
+    onProgress?.(`Reading ${isLiked ? "Liked Songs" : `playlist ${i + 1} of ${playlistIds.length}`}…`);
+    let url: string | null = isLiked
+      ? "/me/tracks?limit=50&fields=items(track(artists(id))),next,total"
+      : `/playlists/${playlistIds[i]}/tracks?limit=100&fields=items(track(artists(id))),next`;
+    while (url) {
+      const d: { items: ({ track?: { artists?: { id?: string }[] } } | null)[]; next?: string | null } = await api(token, url);
+      for (const item of d.items) {
+        for (const a of item?.track?.artists ?? []) if (a.id) ids.add(a.id);
+      }
+      if (d.next) {
+        const next = new URL(d.next);
+        url = next.pathname.replace("/v1", "") + next.search;
+      } else url = null;
+    }
+    if (i < playlistIds.length - 1) await sleep(100);
+  }
+
+  /* Names and pictures come back 50 at a time. A failed batch is retried once
+     and then skipped rather than losing the whole scan. */
+  const all = Array.from(ids);
+  const artists: SpotifyArtist[] = [];
+  for (let i = 0; i < all.length; i += 50) {
+    onProgress?.(`Naming artists… ${Math.min(i + 50, all.length)}/${all.length}`);
+    const batch = all.slice(i, i + 50).join(",");
+    try {
+      const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`);
+      artists.push(...d.artists.filter(Boolean).map((a) => toArtist(a as RawArtist)));
+    } catch {
+      await sleep(3000);
+      try {
+        const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`);
+        artists.push(...d.artists.filter(Boolean).map((a) => toArtist(a as RawArtist)));
+      } catch { /* skip this batch */ }
+    }
+    if (i + 50 < all.length) await sleep(300);
+  }
+  return artists;
 }
 
 function parseDate(dateStr: string, precision: string): Date | null {
@@ -191,7 +285,7 @@ export async function fetchReleases(
     const batch = artists.slice(i, i + BATCH);
     const results = await Promise.all(
       batch.map((a) =>
-        api<{ items: RawAlbum[] }>(token, `/artists/${a.id}/albums?include_groups=album,single&limit=20&market=GB`)
+        api<{ items: RawAlbum[] }>(token, `/artists/${a.id}/albums?include_groups=album,single,compilation&limit=20&market=GB`)
           .catch(() => ({ items: [] as RawAlbum[] })),
       ),
     );

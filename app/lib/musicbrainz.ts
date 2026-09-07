@@ -61,14 +61,13 @@ function albumType(primary?: string): string {
   return t === "single" || t === "ep" ? "single" : "album";
 }
 
-/* Everything announced between today and a year out. */
-export async function fetchUpcoming(
+async function fetchInRange(
   artists: SpotifyArtist[],
+  from: string,
+  to: string,
   signal?: AbortSignal,
   onProgress?: (batch: number, total: number) => void,
 ): Promise<ReleaseGroup[]> {
-  const from = ymd(new Date());
-  const to = ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
   const range = `firstreleasedate:[${from} TO ${to}]`;
 
   const results: ReleaseGroup[] = [];
@@ -93,12 +92,34 @@ export async function fetchUpcoming(
   return results;
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/* Everything announced between today and a year out. */
+export function fetchUpcoming(
+  artists: SpotifyArtist[],
+  signal?: AbortSignal,
+  onProgress?: (batch: number, total: number) => void,
+): Promise<ReleaseGroup[]> {
+  return fetchInRange(artists, ymd(new Date()), ymd(new Date(Date.now() + 365 * DAY)), signal, onProgress);
+}
+
+/* The last six months. Spotify reports its own back-catalogue, so this is only
+   needed for YouTube members, where MusicBrainz is the sole source. */
+export function fetchRecent(
+  artists: SpotifyArtist[],
+  signal?: AbortSignal,
+  onProgress?: (batch: number, total: number) => void,
+): Promise<ReleaseGroup[]> {
+  return fetchInRange(artists, ymd(new Date(Date.now() - 180 * DAY)), ymd(new Date()), signal, onProgress);
+}
+
 /* MusicBrainz matches on name, so anything we can't tie back to a tracked
    artist is dropped rather than guessed at. */
 export function matchToArtists(
   groups: ReleaseGroup[],
   artists: SpotifyArtist[],
   existing: Release[],
+  isUpcoming = true,
 ): Release[] {
   const byName = new Map(artists.map((a) => [a.name.toLowerCase().trim(), a]));
   const seen = new Set(existing.map((r) => `${r.title.toLowerCase().trim()}::${r.artist.toLowerCase().trim()}`));
@@ -124,7 +145,7 @@ export function matchToArtists(
     out.push({
       id: `mb-${rg.id}`, title: rg.title, artist, artistIds: [matched.id],
       releaseDate: dateStr, precision: precisionOf(dateStr), date: parseMbDate(dateStr),
-      isUpcoming: true, albumType: albumType(rg["primary-type"]),
+      isUpcoming, albumType: albumType(rg["primary-type"]),
       artUrl: `https://coverartarchive.org/release-group/${rg.id}/front-250`,
       url: `https://musicbrainz.org/release-group/${rg.id}`,
       source: "musicbrainz",
