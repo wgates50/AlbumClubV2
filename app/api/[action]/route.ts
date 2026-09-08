@@ -544,7 +544,10 @@ const tracks = (d.results ?? [])
 return J({ ok: true, tracks });
 }
 if (!q || q.trim().length < 2) return J({ ok: true, results: [] });
-const u = `https://itunes.apple.com/search?term=${encodeURIComponent(q.trim())}&entity=album&limit=8&country=GB`;
+/* Picking artwork by eye wants a wider net than filling in a new album does. */
+const want = Number(req.nextUrl.searchParams.get("limit"));
+const limit = Number.isFinite(want) ? Math.min(Math.max(Math.trunc(want), 1), 24) : 8;
+const u = `https://itunes.apple.com/search?term=${encodeURIComponent(q.trim())}&entity=album&limit=${limit}&country=GB`;
 const res = await fetch(u, { signal: AbortSignal.timeout(9000), cache: "no-store" });
 if (!res.ok) return J({ ok: true, results: [], warning: "Lookup unavailable" });
 const d = (await res.json()) as { results?: Record<string, unknown>[] };

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { fallbackArt } from "./lib/art";
+import ArtworkPicker from "./artwork";
 
 type Member = { id: string; name: string; color: string; sortOrder: number };
 type Album = {
@@ -33,6 +34,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [pickedId, setPickedId] = useState<string>("");
   const [saved, setSaved] = useState("");
+const [picking, setPicking] = useState(false);
 
   /* Ask once on first render what the server thinks. */
   useMemo(() => {
@@ -187,9 +189,12 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
             </div>
             <div className="grow">
               <label className="field">
-                <span>Artwork URL</span>
-                <input type="text" defaultValue={album.artUrl ?? ""} placeholder="https://…"
-                  onBlur={(e) => { if (e.target.value !== (album.artUrl ?? "")) void saveAlbum({ artUrl: e.target.value || null }); }} />
+                <span>Artwork</span>
+                <div className="flex gap8">
+                  <input type="text" defaultValue={album.artUrl ?? ""} placeholder="Pick one, or paste a URL"
+                    onBlur={(e) => { if (e.target.value !== (album.artUrl ?? "")) void saveAlbum({ artUrl: e.target.value || null }); }} />
+                  <button className="btn" onClick={() => setPicking(true)}>Find&hellip;</button>
+                </div>
               </label>
               <div className="grid3">
                 <label className="field">
@@ -231,6 +236,9 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
             </div>
           </div>
           <p className="muted mt14">Every field saves when you click away from it.</p>
+          {picking && (
+            <ArtworkPicker album={album} onClose={() => setPicking(false)} onSaved={onChanged} />
+          )}
         </>
       )}
     </div>

@@ -5,6 +5,7 @@ import { fallbackArt } from "./lib/art";
 import { PALETTE, accentVars } from "./lib/accent";
 import Upcoming from "./upcoming";
 import Admin from "./admin";
+import ArtworkPicker from "./artwork";
 
 /* ------------------------------ types ------------------------------ */
 
@@ -199,6 +200,7 @@ const [favs, setFavs] = useState<string[]>(mine?.favTracks ?? []);
 const [skipped, setSkipped] = useState(mine?.skipped ?? false);
 const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
 const [newTrack, setNewTrack] = useState("");
+const [picking, setPicking] = useState(false);
 const snapshot = (s: number | null, r: string, f: string[], k: boolean) => JSON.stringify([s, r, f, k]);
 const lastSaved = useRef(snapshot(mine?.score ?? null, mine?.review ?? "", mine?.favTracks ?? [], mine?.skipped ?? false));
 const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -264,11 +266,15 @@ return (
 {stats.scoredCount === stats.total ? "club average" : "average so far"} {fmt(stats.avg)}
 </span>
 )}
-<button className="btn ghost sm right" onClick={() => onEdit(album)}>Edit</button>
+<button className="btn ghost sm right" onClick={() => setPicking(true)}>Artwork</button>
+<button className="btn ghost sm" onClick={() => onEdit(album)}>Edit</button>
 </div>
 <ListenRow album={album} />
 </div>
 </div>
+{picking && (
+<ArtworkPicker album={album} onClose={() => setPicking(false)} onSaved={onChanged} />
+)}
 
 <div className="panels">
 <section className="panel">
@@ -794,14 +800,15 @@ function ArtworkFinder({ albums, onChanged }: { albums: Album[]; onChanged: () =
 const missing = useMemo(() => albums.filter((a) => !a.artUrl), [albums]);
 const [busy, setBusy] = useState(false);
 const [note, setNote] = useState("");
-const [report, setReport] = useState<{ found: number; skipped: string[] } | null>(null);
+const [report, setReport] = useState<{ found: number; skipped: number } | null>(null);
+const [picking, setPicking] = useState<Album | null>(null);
 
 const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const run = async () => {
 setBusy(true); setReport(null);
 let found = 0;
-const skipped: string[] = [];
+let skipped = 0;
 for (let i = 0; i < missing.length; i++) {
 const a = missing[i];
 setNote(`Looking up ${i + 1} of ${missing.length} — ${a.title}`);
@@ -811,7 +818,7 @@ const want = norm(a.artist);
 const hit =
 results.find((r) => norm(r.artist) === want) ??
 results.find((r) => norm(r.artist).includes(want) || want.includes(norm(r.artist)));
-if (!hit) { skipped.push(`${a.title} — ${a.artist}`); continue; }
+if (!hit) { skipped += 1; continue; }
 const saved = await api("/api/albums", {
 method: "PATCH",
 body: JSON.stringify({
@@ -820,7 +827,7 @@ appleUrl: a.appleUrl ?? hit.appleUrl,
 year: a.year ?? hit.year,
 }),
 });
-if (saved.ok) found += 1; else skipped.push(`${a.title} — couldn't save`);
+if (saved.ok) found += 1; else skipped += 1;
 await new Promise((r) => setTimeout(r, 300)); /* Apple rate-limits bursts */
 }
 setBusy(false); setNote("");
@@ -849,17 +856,30 @@ match with confidence.
 )}
 {note && <p className="muted mt8">{note}</p>}
 {report && (
-<div className="mt14">
-<p className="muted">
+<p className="muted mt14">
 Found {report.found} sleeve{report.found === 1 ? "" : "s"}.
-{report.skipped.length > 0 && ` ${report.skipped.length} couldn't be matched — add those by hand with Edit.`}
+{report.skipped > 0 && ` ${report.skipped} still to do — pick those below.`}
 </p>
-{report.skipped.length > 0 && (
-<ul className="art-missed">
-{report.skipped.map((t) => <li key={t}>{t}</li>)}
-</ul>
 )}
+
+{/* Whatever the automatic pass can't place is listed here to sort out by
+    eye, rather than left as a list of names you can do nothing with. */}
+{missing.length > 0 && (
+<div className="art-todo">
+{missing.map((a) => (
+<button className="art-todo-row" key={a.id} onClick={() => setPicking(a)}>
+<Thumb album={a} size={40} />
+<span className="min0">
+<span className="art-todo-title">{a.title}</span>
+<span className="art-todo-sub">{a.artist}</span>
+</span>
+<span className="art-todo-cta">Choose&hellip;</span>
+</button>
+))}
 </div>
+)}
+{picking && (
+<ArtworkPicker album={picking} onClose={() => setPicking(null)} onSaved={onChanged} />
 )}
 </>
 );

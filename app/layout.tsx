@@ -1096,6 +1096,7 @@ label.field > span {
   .up-row-actions { padding-left: 0; }
   .up-connect h2 { font-size: 32px; }
   .wall { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 14px; }
+  .pick-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
   .album-glow { left: -16px; right: -16px; height: 300px; }
   .admin-row { grid-template-columns: 1fr; }
   .admin-row textarea { grid-column: 1; }
@@ -1238,7 +1239,36 @@ label.field > span {
 .up-stats b { color: var(--text); font-family: var(--font-display); font-size: 17px; margin-right: 5px; font-weight: 400; }
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.art-missed { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+/* ---- choosing a sleeve ---- */
+.pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 14px; margin: 4px 0 6px; }
+.pick { display: flex; flex-direction: column; gap: 6px; text-align: left; cursor: pointer;
+  background: none; border: 0; padding: 0; color: var(--text-dim); transition: color 0.16s var(--ease); }
+.pick:hover:not(:disabled) { color: var(--text); }
+.pick:disabled { opacity: 0.5; cursor: default; }
+.pick-art { position: relative; width: 100%; aspect-ratio: 1; border-radius: 2px; overflow: hidden;
+  background: var(--surface-2); display: block; outline: 2px solid transparent;
+  transition: outline-color 0.16s var(--ease), transform 0.18s var(--ease); }
+.pick-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pick:hover:not(:disabled) .pick-art { outline-color: var(--accent); outline-offset: 2px; transform: translateY(-2px); }
+.pick-saving { position: absolute; inset: 0; display: grid; place-items: center;
+  background: rgba(11,10,9,0.7); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+.pick-title { font-size: 12.5px; line-height: 1.3; color: inherit;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pick-sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px;
+  padding-top: 16px; border-top: 1px solid var(--line-soft); }
+
+/* ---- the still-to-do list in Club settings ---- */
+.art-todo { display: flex; flex-direction: column; margin-top: 14px; }
+.art-todo-row { display: flex; align-items: center; gap: 13px; width: 100%; cursor: pointer; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--line-soft); padding: 9px 2px;
+  color: var(--text-dim); transition: color 0.16s var(--ease); }
+.art-todo-row:hover { color: var(--text); }
+.art-todo-row .min0 { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.art-todo-title { font-family: var(--font-display); font-size: 16px; line-height: 1.2; color: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-todo-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-todo-cta { flex: none; font-size: 12px; color: var(--accent); }
 
 /* ---- artwork in the interface ---- */
 
