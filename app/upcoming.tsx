@@ -189,17 +189,46 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     const asArtists: SpotifyArtist[] = live.map((a) => ({
       id: a.id, name: a.name, imageUrl: a.imageUrl, source: a.source,
     }));
+    let partialNote = "";
+    /* One way to bank a set of releases, used by the instalments, by a scan
+       that stops early, and at the end — so "what it found is saved" is true
+       whenever it is said. */
+    const bank = async (list: Release[]) => {
+      if (controller.signal.aborted) return;
+      const saved = await call("/api/upcoming", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ releases: list.map(dehydrate) }),
+      });
+      if (saved.ok) setWire((prev) => (prev ? { ...prev, refreshedAt: new Date().toISOString() } : prev));
+    };
 
     try {
       let base = held;
       if (service === "spotify") {
         setBusy("Checking Spotify for new releases…");
-        const found = await fetchReleases(asArtists, (done, total) =>
-          setBusy(`Checking Spotify… ${done}/${total} artists`),
+        const scan = await fetchReleases(
+          asArtists,
+          (done, total) => setBusy(`Checking Spotify… ${done} of ${total} artists`),
+          controller.signal,
+          /* Each instalment goes straight to the screen and to the server, so a
+             long scan is useful before it finishes and survives being cut off. */
+          (partial) => {
+            const soFar = mergeReleases(held, partial);
+            setReleases(soFar);
+            void bank(soFar);
+          },
         );
         if (controller.signal.aborted) return;
-        base = mergeReleases(held, found);
+        base = mergeReleases(held, scan.releases);
         setReleases(base);
+        if (scan.scanned < scan.total) {
+          /* Banked here rather than at the end: MusicBrainz still has a minute
+             of work to do and may fail, and this much is already worth having. */
+          await bank(base);
+          partialNote = scan.rateLimited
+            ? `Spotify stopped us after ${scan.scanned} of ${scan.total} artists — it limits how fast anyone can ask. What it gave us is saved; try again in a few minutes for the rest.`
+            : `Stopped at ${scan.scanned} of ${scan.total} artists. What it found is saved.`;
+        }
       } else {
         setBusy("Looking up recent releases…");
         const recent = await fetchRecent(asArtists, controller.signal, (b, t) =>
@@ -218,21 +247,16 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
       const extra = matchToArtists(groups, asArtists, base, true);
       const all = mergeReleases(base, extra);
       setReleases(all);
-      setNote(extra.length ? `${extra.length} more found via MusicBrainz` : "");
+      const found = extra.length ? `${extra.length} more found via MusicBrainz` : "";
+      setNote([partialNote, found].filter(Boolean).join(" "));
 
       /* Banked, so the next visit opens on this instead of running it again —
          unless this scan has since been abandoned, in which case writing now
          would undo whatever abandoned it. */
-      if (controller.signal.aborted) return;
-      const saved = await call("/api/upcoming", {
-        method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ releases: all.map(dehydrate) }),
-      });
-      if (saved.ok) {
-        setWire((p) => (p ? { ...p, refreshedAt: new Date().toISOString() } : p));
-      }
+      await bank(all);
     } catch (err) {
       if ((err as Error)?.name === "AbortError") return;
+      if (partialNote) setNote(partialNote);
       setError(humanError(err, "Couldn't load releases"));
     } finally {
       if (!controller.signal.aborted) setBusy("");

@@ -129,19 +129,61 @@ async function serverToken(): Promise<string> {
   return d.accessToken;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); },
+      { once: true });
+  });
 
-async function api<T>(token: string, endpoint: string, retries = 2): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 429) {
-    await sleep((parseInt(res.headers.get("Retry-After") ?? "1", 10) || 1) * 1000);
-    return api<T>(token, endpoint, retries);
+/* Spotify asking us to back off is not a per-request problem: every other
+   request in the scan is about to be told the same thing. It stops the scan
+   rather than being retried into a stall. */
+export class RateLimited extends Error {
+  retryAfter: number;
+  constructor(retryAfter: number) {
+    super(`Spotify rate limit, retry after ${retryAfter}s`);
+    this.name = "RateLimited";
+    this.retryAfter = retryAfter;
   }
-  if (res.status === 401 && retries > 0) {
-    return api<T>(await serverToken(), endpoint, retries - 1);
+}
+
+/* A fetch with no timeout hangs forever on a stalled connection, and a whole
+   batch waits on its slowest member. */
+function guard(signal: AbortSignal | undefined, ms: number) {
+  const c = new AbortController();
+  const timer = setTimeout(() => c.abort(new DOMException("Timed out", "TimeoutError")), ms);
+  const relay = () => c.abort(signal?.reason);
+  if (signal?.aborted) c.abort(signal.reason);
+  else signal?.addEventListener("abort", relay, { once: true });
+  return {
+    signal: c.signal,
+    release() { clearTimeout(timer); signal?.removeEventListener("abort", relay); },
+  };
+}
+
+async function api<T>(token: string, endpoint: string, opts: { signal?: AbortSignal; retries?: number } = {}): Promise<T> {
+  const { signal } = opts;
+  let retries = opts.retries ?? 2;
+  for (;;) {
+    const g = guard(signal, 12000);
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${endpoint}`, { headers: { Authorization: `Bearer ${token}` }, signal: g.signal });
+    } finally {
+      g.release();
+    }
+    if (res.status === 429) {
+      throw new RateLimited(parseInt(res.headers.get("Retry-After") ?? "1", 10) || 1);
+    }
+    if (res.status === 401 && retries > 0) {
+      retries -= 1;
+      token = await serverToken();
+      continue;
+    }
+    if (!res.ok) throw new Error(`Spotify error ${res.status}`);
+    return (await res.json()) as T;
   }
-  if (!res.ok) throw new Error(`Spotify error ${res.status}`);
-  return (await res.json()) as T;
 }
 
 type RawArtist = { id: string; name: string; images?: { url: string }[] };
@@ -269,26 +311,73 @@ type RawAlbum = {
   images?: { url: string }[]; artists: { id: string; name: string }[]; external_urls?: { spotify?: string };
 };
 
-/* Everything out in the last 6 months, plus everything announced ahead. */
+export type ScanResult = {
+  releases: Release[];
+  /* How far it got. Short of `total` means it stopped early and what came back
+     is a partial answer worth keeping rather than a complete one. */
+  scanned: number;
+  total: number;
+  rateLimited: boolean;
+};
+
+/* Everything out in the last 6 months, plus everything announced ahead.
+   Spotify has no bulk endpoint for this, so it is one request per artist —
+   with a thousand of them that is minutes of work, and the job is to make it
+   survivable rather than fast: paced under the rate limit, interruptible, and
+   handing back what it has whenever it stops. */
 export async function fetchReleases(
   artists: SpotifyArtist[],
   onProgress?: (done: number, total: number) => void,
-): Promise<Release[]> {
+  signal?: AbortSignal,
+  onPartial?: (releases: Release[], done: number) => void,
+): Promise<ScanResult> {
   const token = await serverToken();
   const out = new Map<string, Release>();
   const now = new Date();
   const cutoff = new Date(now);
   cutoff.setDate(cutoff.getDate() - 180);
 
-  const BATCH = 20;
-  for (let i = 0; i < artists.length; i += BATCH) {
+  /* Spotify's ceiling is not documented and moves, so rather than guess it,
+     start briskly and let the 429s tune it: each one costs its stated wait and
+     halves the pace from then on. Twenty back to back, which is what this used
+     to do, went over within seconds. */
+  const BATCH = 6;
+  const BANK_EVERY = 150;
+  let pause = 250;
+  let strikes = 0;
+  let banked = 0;
+  let scanned = 0;
+  let rateLimited = false;
+
+  let i = 0;
+  while (i < artists.length) {
+    if (signal?.aborted) break;
     const batch = artists.slice(i, i + BATCH);
-    const results = await Promise.all(
-      batch.map((a) =>
-        api<{ items: RawAlbum[] }>(token, `/artists/${a.id}/albums?include_groups=album,single,compilation&limit=20&market=GB`)
-          .catch(() => ({ items: [] as RawAlbum[] })),
-      ),
-    );
+    let results: { items: RawAlbum[] }[];
+    try {
+      results = await Promise.all(
+        batch.map((a) =>
+          api<{ items: RawAlbum[] }>(token, `/artists/${a.id}/albums?include_groups=album,single,compilation&limit=20&market=GB`, { signal })
+            .catch((err) => {
+              if (err instanceof RateLimited || (err as Error)?.name === "AbortError") throw err;
+              return { items: [] as RawAlbum[] };
+            }),
+        ),
+      );
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") break;
+      if (err instanceof RateLimited) {
+        /* A long cool-off is indistinguishable from a freeze from the outside,
+           and repeated strikes mean we are not going to finish this sitting. */
+        if (err.retryAfter > 30 || ++strikes > 4) { rateLimited = true; break; }
+        try { await sleep(err.retryAfter * 1000, signal); } catch { break; }
+        pause = Math.min(pause * 2, 4000);
+        continue;   /* same batch, slower */
+      }
+      throw err;
+    }
+    i += BATCH;
+    scanned = Math.min(i, artists.length);
     for (const d of results) {
       for (const al of d.items) {
         if (out.has(al.id)) continue;
@@ -309,8 +398,17 @@ export async function fetchReleases(
         });
       }
     }
-    onProgress?.(Math.min(i + BATCH, artists.length), artists.length);
-    if (i + BATCH < artists.length) await sleep(50);
+    onProgress?.(scanned, artists.length);
+    /* Banked along the way, so a scan that is interrupted at artist 700 is not
+       700 artists of work thrown away. */
+    if (onPartial && scanned - banked >= BANK_EVERY) {
+      banked = scanned;
+      onPartial(Array.from(out.values()), scanned);
+    }
+    if (i < artists.length) { try { await sleep(pause, signal); } catch { break; } }
   }
-  return Array.from(out.values()).sort((a, b) => b.date.getTime() - a.date.getTime());
+  return {
+    releases: Array.from(out.values()).sort((a, b) => b.date.getTime() - a.date.getTime()),
+    scanned, total: artists.length, rateLimited,
+  };
 }
