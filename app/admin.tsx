@@ -18,7 +18,7 @@ type Rating = {
 
 type Props = { albums: Album[]; members: Member[]; ratings: Rating[]; onChanged: () => void };
 type Status = { configured: boolean; unlocked: boolean };
-type Filter = "all" | "noart" | "zero";
+type Filter = "all" | "noart" | "nodate" | "zero";
 
 async function call(url: string, init?: RequestInit) {
   const res = await fetch(url, init?.body ? { headers: { "content-type": "application/json" }, ...init } : init);
@@ -60,10 +60,12 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
     return albums
       .map((a) => {
         const rs = ratingsFor.get(a.id) ?? [];
-        return { a, rs, noArt: !a.artUrl, hasZero: rs.some((r) => r.score === 0 && !r.skipped) };
+        return { a, rs, noArt: !a.artUrl, noDate: !a.releaseDate,
+                 hasZero: rs.some((r) => r.score === 0 && !r.skipped) };
       })
-      .filter(({ a, noArt, hasZero }) => {
+      .filter(({ a, noArt, noDate, hasZero }) => {
         if (filter === "noart" && !noArt) return false;
+        if (filter === "nodate" && !noDate) return false;
         if (filter === "zero" && !hasZero) return false;
         if (q && !`${a.title} ${a.artist}`.toLowerCase().includes(q)) return false;
         return true;
@@ -74,6 +76,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
   const counts = useMemo(() => ({
     all: albums.length,
     noart: albums.filter((a) => !a.artUrl).length,
+    nodate: albums.filter((a) => !a.releaseDate).length,
     zero: albums.filter((a) => (ratingsFor.get(a.id) ?? []).some((r) => r.score === 0 && !r.skipped)).length,
   }), [albums, ratingsFor]);
 
@@ -157,6 +160,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
   const FILTERS: [Filter, string, number][] = [
     ["all", "Everything", counts.all],
     ["noart", "No artwork", counts.noart],
+    ["nodate", "No release date", counts.nodate],
     ["zero", "Scored zero", counts.zero],
   ];
 
@@ -179,10 +183,11 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
       <input type="text" className="up-search" placeholder="Search albums…"
         value={search} onChange={(e) => setSearch(e.target.value)} />
 
-      {error && <p className="error">{error}</p>}
+      {error && !openId && <p className="error">{error}</p>}
       {!rows.length && (
         <p className="up-empty">
           {filter === "noart" ? "Every album has a sleeve."
+            : filter === "nodate" ? "Every album has a release date."
             : filter === "zero" ? "Nobody has left a bare zero."
             : "Nothing matches that."}
         </p>
@@ -194,7 +199,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
           const chooser = members.find((m) => m.id === a.chosenBy);
           return (
             <div className={`adm-item${isOpen ? " open" : ""}`} key={a.id}>
-              <button className="adm-row" onClick={() => setOpenId(isOpen ? null : a.id)} aria-expanded={isOpen}>
+              <button className="adm-row" onClick={() => { setError(""); setOpenId(isOpen ? null : a.id); }} aria-expanded={isOpen}>
                 <span className={`adm-art${noArt ? " none" : ""}`}
                   style={a.artUrl ? undefined : { background: fallbackArt(a.artist + a.title) }}>
                   {a.artUrl ? <img src={a.artUrl} alt="" loading="lazy" /> : <span className="adm-art-tag">no art</span>}
@@ -203,6 +208,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
                   <span className="adm-title">{a.title}</span>
                   <span className="adm-sub">
                     {a.artist} · {monthLabel(a.month)}{chooser ? ` · ${chooser.name}` : ""}
+                    {!a.releaseDate && <em className="adm-gap"> · no release date</em>}
                   </span>
                 </span>
                 <span className="adm-scores">
@@ -223,6 +229,7 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
 
               {isOpen && (
                 <div className="adm-edit">
+                  {error && <p className="error mb12">{error}</p>}
                   {members.map((m) => {
                     const r = rs.find((x) => x.memberId === m.id);
                     return (

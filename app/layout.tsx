@@ -1457,6 +1457,7 @@ label.field > span {
 .adm-title { font-family: var(--font-display); font-size: 18px; line-height: 1.25; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .adm-sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-gap { color: var(--muted-2); font-style: italic; }
 
 .adm-scores { display: flex; gap: 6px; flex: none; }
 .adm-score { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; padding: 3px 9px 3px 7px;
