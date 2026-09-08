@@ -103,14 +103,22 @@ export function fetchUpcoming(
   return fetchInRange(artists, ymd(new Date()), ymd(new Date(Date.now() + 365 * DAY)), signal, onProgress);
 }
 
-/* The last six months. Spotify reports its own back-catalogue, so this is only
-   needed for YouTube members, where MusicBrainz is the sole source. */
+/* Spotify reports its own back-catalogue, so this is only needed for YouTube
+   members, where MusicBrainz is the sole source. `since` is the last time this
+   member scanned: on a repeat visit there is no reason to ask again about
+   months already on file, and asking costs a second a batch. The first scan
+   passes nothing and gets the full six months. */
 export function fetchRecent(
   artists: SpotifyArtist[],
   signal?: AbortSignal,
   onProgress?: (batch: number, total: number) => void,
+  since?: Date | null,
 ): Promise<ReleaseGroup[]> {
-  return fetchInRange(artists, ymd(new Date(Date.now() - 180 * DAY)), ymd(new Date()), signal, onProgress);
+  const floor = Date.now() - 180 * DAY;
+  /* A day either side of the last scan, since a release can be dated before the
+     day it was added to the database. */
+  const from = since ? Math.max(floor, since.getTime() - DAY) : floor;
+  return fetchInRange(artists, ymd(new Date(from)), ymd(new Date()), signal, onProgress);
 }
 
 /* MusicBrainz matches on name, so anything we can't tie back to a tracked

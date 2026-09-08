@@ -22,9 +22,15 @@ type ShortlistItem = {
   id: string; month: string; title: string; artist: string;
   releaseDate: string | null; artUrl: string | null; spotifyUrl: string | null; source: string | null;
 };
+type StoredRelease = {
+  id: string; title: string; artist: string; artistIds: string[];
+  releaseDate: string; sortDate: string; precision: string; albumType: string;
+  artUrl: string | null; url: string | null; source: string;
+};
 type Wire = {
   ok: true; connected: boolean; service: Service | null; scannedAt: string | null;
-  playlistIds: string[]; artists: Tracked[]; shortlist: ShortlistItem[];
+  refreshedAt: string | null; playlistIds: string[]; artists: Tracked[];
+  shortlist: ShortlistItem[]; releases: StoredRelease[];
 };
 
 type Props = { currentMonth: string; onPicked: () => void };
@@ -34,6 +40,10 @@ const FILTERS: [Filter, string][] = [
   ["all", "All"], ["upcoming", "Announced"], ["recent", "Recent"],
   ["albums", "Albums"], ["singles", "Singles"],
 ];
+
+/* Labels announce on their own schedule; six hours is plenty often to catch up
+   and rare enough that opening the tab is normally instant. */
+const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 const monthLabel = (m: string) =>
   new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
@@ -66,6 +76,16 @@ function humanError(err: unknown, fallback: string): string {
   return msg || fallback;
 }
 
+function agoLabel(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 function formatDay(dateStr: string | null): string {
   if (!dateStr) return "";
   const d = new Date(`${dateStr.length === 7 ? `${dateStr}-01` : dateStr}T00:00:00`);
@@ -73,6 +93,37 @@ function formatDay(dateStr: string | null): string {
   return dateStr.length === 7
     ? d.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
     : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/* "Upcoming" is never carried across the wire: it is true only until the date
+   passes, so a stored flag would quietly rot. Derive it on the way in. */
+function hydrate(r: StoredRelease): Release {
+  const date = new Date(`${r.sortDate}T00:00:00`);
+  return {
+    id: r.id, title: r.title, artist: r.artist, artistIds: r.artistIds,
+    releaseDate: r.releaseDate,
+    precision: (r.precision === "month" || r.precision === "year" ? r.precision : "day") as Release["precision"],
+    date, isUpcoming: date.getTime() > Date.now(),
+    albumType: r.albumType, artUrl: r.artUrl, url: r.url,
+    source: (r.source === "musicbrainz" ? "musicbrainz" : "spotify") as Release["source"],
+  };
+}
+const dehydrate = (r: Release): StoredRelease => ({
+  id: r.id, title: r.title, artist: r.artist, artistIds: r.artistIds,
+  releaseDate: r.releaseDate, sortDate: r.date.toISOString().slice(0, 10),
+  precision: r.precision, albumType: r.albumType,
+  artUrl: r.artUrl, url: r.url, source: r.source,
+});
+
+/* A scan only ever looks forward, so anything it does not mention is still
+   good and stays. Where both have a record, the fresh one wins. */
+function mergeReleases(held: Release[], found: Release[]): Release[] {
+  const by = new Map(held.map((r) => [r.id, r]));
+  for (const r of found) by.set(r.id, r);
+  const now = Date.now();
+  return [...by.values()]
+    .map((r) => ({ ...r, isUpcoming: r.date.getTime() > now }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 async function call(url: string, init?: RequestInit) {
@@ -110,15 +161,23 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
 
   const load = useCallback(async () => {
     const res = await call("/api/upcoming");
-    if (res.ok) setWire(res.data as unknown as Wire);
-    return res.data as unknown as Wire;
+    const w = res.data as unknown as Wire;
+    if (res.ok) {
+      setWire(w);
+      /* Straight onto the screen. A scan, if one is even due, tops this up
+         behind it rather than replacing an empty page. */
+      setReleases((w.releases ?? []).map(hydrate));
+    }
+    return w;
   }, []);
 
   /* Refresh releases for the artists already on file — the "open the tab" path,
      which needs no rescan. Spotify reports its own catalogue and MusicBrainz
      adds what has been announced; for YouTube there is no release API at all,
      so MusicBrainz covers both directions. */
-  const refreshReleases = useCallback(async (artists: Tracked[], service: Service) => {
+  const refreshReleases = useCallback(async (
+    artists: Tracked[], service: Service, held: Release[] = [], since: Date | null = null,
+  ) => {
     const live = artists.filter((a) => !a.excluded);
     if (!live.length) { setBusy(""); return; }
     abort.current?.abort();
@@ -131,21 +190,22 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     }));
 
     try {
-      let base: Release[] = [];
+      let base = held;
       if (service === "spotify") {
         setBusy("Checking Spotify for new releases…");
-        base = await fetchReleases(asArtists, (done, total) =>
+        const found = await fetchReleases(asArtists, (done, total) =>
           setBusy(`Checking Spotify… ${done}/${total} artists`),
         );
         if (controller.signal.aborted) return;
+        base = mergeReleases(held, found);
         setReleases(base);
       } else {
         setBusy("Looking up recent releases…");
         const recent = await fetchRecent(asArtists, controller.signal, (b, t) =>
-          setBusy(`Recent releases… batch ${b}/${t}`),
+          setBusy(`Recent releases… batch ${b}/${t}`), since,
         );
         if (controller.signal.aborted) return;
-        base = matchToArtists(recent, asArtists, [], false);
+        base = mergeReleases(held, matchToArtists(recent, asArtists, held, false));
         setReleases(base);
       }
 
@@ -155,8 +215,18 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
       );
       if (controller.signal.aborted) return;
       const extra = matchToArtists(groups, asArtists, base, true);
-      setReleases([...base, ...extra].sort((a, b) => a.date.getTime() - b.date.getTime()));
+      const all = mergeReleases(base, extra);
+      setReleases(all);
       setNote(extra.length ? `${extra.length} more found via MusicBrainz` : "");
+
+      /* Banked, so the next visit opens on this instead of running it again. */
+      const saved = await call("/api/upcoming", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ releases: all.map(dehydrate) }),
+      });
+      if (saved.ok) {
+        setWire((p) => (p ? { ...p, refreshedAt: new Date().toISOString() } : p));
+      }
     } catch (err) {
       if ((err as Error)?.name === "AbortError") return;
       setError(humanError(err, "Couldn't load releases"));
@@ -202,7 +272,12 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
       if (cancelled || !w?.ok) { setBusy(""); return; }
       if (w.connected && w.artists.length && w.service && !refreshed.current) {
         refreshed.current = true;
-        await refreshReleases(w.artists, w.service);
+        const since = w.refreshedAt ? new Date(w.refreshedAt) : null;
+        /* Opening the tab used to mean sitting through a full scan every time.
+           Now what is on file is already on screen, and a scan only runs if it
+           has gone stale. "Check for releases" forces one whenever you like. */
+        if (since && Date.now() - since.getTime() < STALE_AFTER_MS) { setBusy(""); return; }
+        await refreshReleases(w.artists, w.service, (w.releases ?? []).map(hydrate), since);
       } else if (w.connected && !w.artists.length && w.service && !refreshed.current) {
         refreshed.current = true;
         await openPicker(w.service, w.playlistIds ?? []);
@@ -228,7 +303,9 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     });
     if (!saved.ok) throw new Error(String(saved.data.error ?? "Couldn't save your artists"));
     const w = await load();
-    await refreshReleases((w?.artists ?? []) as Tracked[], service);
+    /* The artist list has just been replaced, so this starts from nothing
+       rather than from releases belonging to artists that may be gone. */
+    await refreshReleases((w?.artists ?? []) as Tracked[], service, [], null);
   }, [load, refreshReleases]);
 
   const rescan = useCallback(() => {
@@ -478,7 +555,8 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
         <div className="up-actions">
           <button className="btn sm" disabled={Boolean(busy)}
             title="Re-check the artists you already track for anything new"
-            onClick={() => refreshReleases(wire.artists, wire.service ?? "spotify")}>
+            onClick={() => refreshReleases(wire.artists, wire.service ?? "spotify", releases,
+              wire.refreshedAt ? new Date(wire.refreshedAt) : null)}>
             {busy ? "Working…" : "Check for releases"}
           </button>
           <button className="btn sm ghost" disabled={Boolean(busy)} onClick={rescan}
@@ -498,6 +576,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
             <span><b>{unhidden.length}</b> releases</span>
             <span><b>{unhidden.filter((r) => r.isUpcoming).length}</b> announced</span>
             <span><b>{artistRows.activeTotal}</b> artists</span>
+            {wire.refreshedAt && <span className="up-checked">checked {agoLabel(wire.refreshedAt)}</span>}
           </div>
           <div className="up-filters">
             {FILTERS.map(([f, label]) => (

@@ -54,8 +54,18 @@ await p.query(`create table if not exists music_accounts (member_id text primary
 await p.query(`create table if not exists tracked_artists (member_id text not null, artist_id text not null, name text not null, image_url text, source text not null default 'spotify', excluded boolean not null default false, updated_at timestamptz not null default now(), primary key (member_id, artist_id))`);
 await p.query(`create table if not exists shortlist (id text primary key, member_id text not null, month text not null, title text not null, artist text not null, release_date text, art_url text, spotify_url text, source text, added_at timestamptz not null default now())`);
 await p.query(`create index if not exists shortlist_member_month_idx on shortlist(member_id, month)`);
+/* Scanning is slow — hundreds of Spotify calls and MusicBrainz's one-per-second
+   ceiling — so what a scan finds is kept and the tab paints from here. sort_date
+   is the release date resolved to a real day (a month-precision date becomes the
+   1st), which is what windowing and pruning need; "upcoming" is never stored,
+   because it is only ever true until the date passes. */
+await p.query(`create table if not exists releases (member_id text not null, id text not null, title text not null, artist text not null, artist_ids text not null default '[]', release_date text not null, sort_date date not null, precision text not null default 'day', album_type text not null default 'album', art_url text, url text, source text not null default 'spotify', seen_at timestamptz not null default now(), primary key (member_id, id))`);
+await p.query(`create index if not exists releases_member_date_idx on releases(member_id, sort_date)`);
 /* Added after the table shipped, so it has to be an alter rather than part of the create. */
 await p.query(`alter table music_accounts add column if not exists playlist_ids text not null default '[]'`);
+/* When releases were last looked for, as against scanned_at, which is when the
+   artist list itself was last rebuilt from the account. */
+await p.query(`alter table music_accounts add column if not exists refreshed_at timestamptz`);
 /* "Skipped" is a third state, distinct from an unscored album nobody has got
    to yet — it says the listener made a decision, so stop nagging them. */
 await p.query(`alter table ratings add column if not exists skipped boolean not null default false`);
@@ -193,6 +203,7 @@ await db().query(`insert into ratings (album_id,member_id,score,review,fav_track
 type Account = {
 memberId: string; service: string; accessToken: string | null; refreshToken: string | null;
 expiresAt: string | null; clientId: string | null; scannedAt: string | null; playlistIds: string[];
+refreshedAt?: string | null;
 };
 type TrackedArtist = { id: string; name: string; imageUrl: string | null; source: string; excluded: boolean };
 type ShortlistItem = {
@@ -203,13 +214,14 @@ releaseDate: string | null; artUrl: string | null; spotifyUrl: string | null; so
 async function getAccount(memberId: string): Promise<Account | null> {
 if (!hasDb) return null;
 await ready();
-const r = await db().query(`select member_id,service,access_token,refresh_token,expires_at,client_id,scanned_at,playlist_ids from music_accounts where member_id=$1`, [memberId]);
+const r = await db().query(`select member_id,service,access_token,refresh_token,expires_at,client_id,scanned_at,refreshed_at,playlist_ids from music_accounts where member_id=$1`, [memberId]);
 const x = r.rows[0];
 if (!x) return null;
 return {
 memberId: x.member_id, service: x.service, accessToken: x.access_token, refreshToken: x.refresh_token,
 expiresAt: x.expires_at ? new Date(x.expires_at).toISOString() : null,
 clientId: x.client_id, scannedAt: x.scanned_at ? new Date(x.scanned_at).toISOString() : null,
+refreshedAt: x.refreshed_at ? new Date(x.refreshed_at).toISOString() : null,
 playlistIds: parseList(x.playlist_ids),
 };
 }
@@ -224,6 +236,7 @@ if (!hasDb) return;
 await ready();
 await db().query(`delete from music_accounts where member_id=$1`, [memberId]);
 await db().query(`delete from tracked_artists where member_id=$1`, [memberId]);
+await db().query(`delete from releases where member_id=$1`, [memberId]);
 }
 async function savePlaylistIds(memberId: string, ids: string[]): Promise<void> {
 if (!hasDb) return;
@@ -233,6 +246,75 @@ await db().query(`update music_accounts set playlist_ids=$2 where member_id=$1`,
 async function markScanned(memberId: string): Promise<void> {
 if (!hasDb) return;
 await db().query(`update music_accounts set scanned_at=now() where member_id=$1`, [memberId]);
+}
+
+/* How far back a release stays worth showing. Matches the window the Spotify
+   scan itself pulls, so the stored set and a fresh scan agree. */
+const RELEASE_WINDOW_DAYS = 180;
+const windowStart = () =>
+new Date(Date.now() - RELEASE_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+
+type StoredRelease = {
+id: string; title: string; artist: string; artistIds: string[];
+releaseDate: string; sortDate: string; precision: string; albumType: string;
+artUrl: string | null; url: string | null; source: string;
+};
+
+async function listReleases(memberId: string): Promise<StoredRelease[]> {
+if (!hasDb) return [];
+await ready();
+const r = await db().query(
+`select id,title,artist,artist_ids,release_date,to_char(sort_date,'YYYY-MM-DD') as sort_date,
+        precision,album_type,art_url,url,source
+ from releases where member_id=$1 and sort_date >= $2 order by sort_date asc`,
+[memberId, windowStart()],
+);
+return r.rows.map((x) => ({
+id: x.id, title: x.title, artist: x.artist, artistIds: parseList(x.artist_ids),
+releaseDate: x.release_date, sortDate: x.sort_date,
+precision: x.precision, albumType: x.album_type,
+artUrl: x.art_url, url: x.url, source: x.source,
+}));
+}
+
+/* A scan is a top-up, not a replacement: it only ever looks forward from the
+   last one, so whatever it does not mention is still good. */
+async function saveReleases(memberId: string, items: StoredRelease[]): Promise<void> {
+if (!hasDb || !items.length) return;
+await ready();
+const cols = 12;
+const values: unknown[] = [];
+const rows: string[] = [];
+items.forEach((it, i) => {
+rows.push(`(${Array.from({ length: cols }, (_, c) => `$${i * cols + c + 1}`).join(",")})`);
+values.push(memberId, it.id, it.title, it.artist, JSON.stringify(it.artistIds),
+it.releaseDate, it.sortDate, it.precision, it.albumType, it.artUrl, it.url, it.source);
+});
+await db().query(
+`insert into releases (member_id,id,title,artist,artist_ids,release_date,sort_date,precision,album_type,art_url,url,source)
+ values ${rows.join(",")}
+ on conflict (member_id, id) do update set
+   title=excluded.title, artist=excluded.artist, artist_ids=excluded.artist_ids,
+   release_date=excluded.release_date, sort_date=excluded.sort_date,
+   precision=excluded.precision, album_type=excluded.album_type,
+   art_url=excluded.art_url, url=excluded.url, source=excluded.source, seen_at=now()`,
+values,
+);
+}
+
+async function clearReleases(memberId: string): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`delete from releases where member_id=$1`, [memberId]);
+await db().query(`update music_accounts set refreshed_at=null where member_id=$1`, [memberId]);
+}
+async function pruneReleases(memberId: string): Promise<void> {
+if (!hasDb) return;
+await db().query(`delete from releases where member_id=$1 and sort_date < $2`, [memberId, windowStart()]);
+}
+async function markRefreshed(memberId: string): Promise<void> {
+if (!hasDb) return;
+await db().query(`update music_accounts set refreshed_at=now() where member_id=$1`, [memberId]);
 }
 
 async function listTrackedArtists(memberId: string): Promise<TrackedArtist[]> {
@@ -299,6 +381,7 @@ if (!hasDb) return;
 await ready();
 await db().query(`delete from music_accounts where member_id=$1`, [memberId]);
 await db().query(`delete from tracked_artists where member_id=$1`, [memberId]);
+await db().query(`delete from releases where member_id=$1`, [memberId]);
 if (alsoShortlist) await db().query(`delete from shortlist where member_id=$1`, [memberId]);
 }
 
@@ -594,15 +677,17 @@ if (r === "palette") return J({ ok: true, palette: PALETTE });
 if (r === "upcoming") {
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
-const [account, artists, shortlist] = await Promise.all([
-getAccount(auth.memberId), listTrackedArtists(auth.memberId), listShortlist(auth.memberId),
+const [account, artists, shortlist, releases] = await Promise.all([
+getAccount(auth.memberId), listTrackedArtists(auth.memberId),
+listShortlist(auth.memberId), listReleases(auth.memberId),
 ]);
 return J({
 ok: true,
 connected: Boolean(account?.refreshToken ?? account?.accessToken),
 service: account?.service ?? null, scannedAt: account?.scannedAt ?? null,
+refreshedAt: account?.refreshedAt ?? null,
 playlistIds: account?.playlistIds ?? [],
-artists, shortlist,
+artists, shortlist, releases,
 });
 }
 
@@ -793,6 +878,9 @@ if (Array.isArray(b.playlistIds)) {
 await savePlaylistIds(auth.memberId, (b.playlistIds as unknown[]).map(String));
 }
 await replaceTrackedArtists(auth.memberId, artists);
+/* The artist list has been rebuilt, so anything on file could belong to
+   somebody no longer followed. The scan that follows repopulates it. */
+await clearReleases(auth.memberId);
 await markScanned(auth.memberId);
 return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
 }
@@ -891,10 +979,42 @@ return bad("Not found", 404);
 }
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
-if ((await route(ctx)) !== "ratings") return bad("Not found", 404);
+const put = await route(ctx);
+if (put !== "ratings" && put !== "upcoming") return bad("Not found", 404);
 const auth = await requireMember();
 if (!auth.ok) return auth.res;
 const b = await req.json().catch(() => ({}) as Record<string, unknown>);
+
+/* What a scan found, kept so the next visit does not have to run one. */
+if (put === "upcoming") {
+const raw = Array.isArray(b.releases) ? (b.releases as Record<string, unknown>[]) : [];
+const items: StoredRelease[] = [];
+const seen = new Set<string>();
+for (const x of raw) {
+const id = str(x.id);
+const title = str(x.title);
+const artist = str(x.artist);
+const sortDate = str(x.sortDate);
+if (!id || !title || !artist || !sortDate || seen.has(id)) continue;
+if (!/^\d{4}-\d{2}-\d{2}$/.test(sortDate)) continue;
+seen.add(id);
+items.push({
+id, title, artist,
+artistIds: Array.isArray(x.artistIds) ? (x.artistIds as unknown[]).map(String).slice(0, 8) : [],
+releaseDate: str(x.releaseDate) ?? sortDate, sortDate,
+precision: str(x.precision) ?? "day",
+albumType: str(x.albumType) === "single" ? "single" : "album",
+artUrl: str(x.artUrl), url: str(x.url),
+source: str(x.source) === "musicbrainz" ? "musicbrainz" : "spotify",
+});
+}
+/* One oversized body should not be able to fill the table. */
+await saveReleases(auth.memberId, items.slice(0, 4000));
+await pruneReleases(auth.memberId);
+await markRefreshed(auth.memberId);
+return J({ ok: true, releases: await listReleases(auth.memberId) });
+}
+
 const albumId = String(b.albumId ?? "");
 if (!albumId) return bad("Missing album id");
 if (!(await listAlbums()).some((a) => a.id === albumId)) return bad("No such album", 404);

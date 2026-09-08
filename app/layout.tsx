@@ -1256,6 +1256,7 @@ label.field > span {
 .up-picker input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
 .up-stats { display: flex; gap: 22px; margin-bottom: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
 .up-stats b { color: var(--text); font-family: var(--font-display); font-size: 17px; margin-right: 5px; font-weight: 400; }
+.up-checked { margin-left: auto; color: var(--muted-2); }
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 /* ---- choosing a sleeve ---- */
@@ -1483,6 +1484,8 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .adm-art { grid-row: span 2; align-self: start; }
   .adm-scores { grid-column: 2 / -1; }
   .adm-edit { padding: 2px 8px 18px; }
+  .up-stats { flex-wrap: wrap; gap: 10px 20px; }
+  .up-checked { margin-left: 0; width: 100%; }
   .nudge-body { padding: 16px 16px 18px; }
   .expanded.lb { padding-left: 0; }
 }
