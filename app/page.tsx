@@ -1324,16 +1324,19 @@ return (
 {state.clubName.replace(/\s*club\s*$/i, "")}<span className="dot"> Club</span>
 </div>
 <nav className="tabs" role="tablist">
-{([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"], ["admin", "Admin"]] as [Tab, string][]).map(
-([id, text]) => (
+{([
+["month", "This month", "Month"], ["upcoming", "Upcoming", "Soon"],
+["archive", "Archive", "Past"], ["table", "Leaderboard", "Table"],
+["club", "Club", "Club"], ["admin", "Admin", "Admin"],
+] as [Tab, string, string][]).map(([id, text, short]) => (
 <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-{text}
+<span className="tab-long">{text}</span>
+<span className="tab-short" aria-hidden="true">{short}</span>
 {id === "month" && owesPick && (
 <i className="tab-dot" title="You haven't picked for this month" />
 )}
 </button>
-),
-)}
+))}
 </nav>
 <button className="whoami" onClick={() => setTab("club")}>
 <i className="pip" style={{ background: meMember?.color ?? "var(--muted)" }} />

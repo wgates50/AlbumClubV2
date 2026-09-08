@@ -169,6 +169,8 @@ a {
   flex-wrap: wrap;
 }
 
+.tab-short { display: none; }
+
 .tab {
   background: none;
   border: 0;
@@ -1100,13 +1102,16 @@ label.field > span {
      wrapped nav would cost ~130px of every screen for as long as you use it. */
   .tabs {
     order: 3; width: 100%; margin-left: 0;
-    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity;
-    margin-inline: -16px; padding-inline: 16px;
+    flex-wrap: nowrap; overflow-x: visible;
+    gap: 0; justify-content: space-between;
   }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tab { flex: none; scroll-snap-align: start; }
+  .tab {
+    flex: 1 1 0; min-width: 0; text-align: center;
+    font-size: 11px; letter-spacing: 0.05em; padding: 8px 2px;
+  }
+  .tab-long { display: none; }
+  .tab-short { display: inline; }
+  .tab-dot { margin-left: 4px; }
   /* Safari zooms the whole page when you focus a field under 16px, and never
      zooms back out — writing a review on a phone shouldn't do that. */
   textarea,
@@ -1485,8 +1490,9 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .grid3 { grid-template-columns: 1fr; }
   .hide-sm { display: none; }
   .up-head { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; }
-  .up-views { overflow-x: auto; min-width: 0; }
-  .up-actions { min-width: 0; align-items: center; }
+  .up-views { flex-wrap: wrap; overflow-x: visible; min-width: 0; }
+  .up-view { font-size: 11px; letter-spacing: 0.06em; padding: 7px 9px; }
+  .up-actions { min-width: 0; align-items: center; flex-wrap: wrap; }
   .up-row { flex-wrap: wrap; }
   .up-row-actions { width: 100%; padding-left: 68px; }
   .up-artists { grid-template-columns: minmax(0, 1fr); }
@@ -1501,14 +1507,19 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .expanded.lb { padding-left: 0; }
 }
 
-/* Declared here rather than with the rest of the 560px rules: that block comes
-   earlier in the sheet than the admin section, so at equal specificity it lost
-   on source order and never took effect. */
+/* Everything below overrides a rule declared further down the sheet than the
+   main 560px block near the top. At equal specificity the later declaration
+   wins, so those overrides have to live here, after their base rules, or they
+   silently do nothing. Three separate rules were dead this way. */
 @media (max-width: 560px) {
   .admin-row { grid-template-columns: minmax(0, 1fr); }
   .admin-row textarea { grid-column: 1; }
   .admin-fields { flex-wrap: wrap; }
   .admin-album { flex-direction: column; }
+  /* Three tabs never fit side by side legibly, so they stack full width and
+     nothing has to be dragged into view. */
+  .album-tabs { flex-wrap: wrap; overflow-x: visible; gap: 6px; margin-bottom: 20px; }
+  .album-tab { flex: 1 1 100%; min-width: 0; max-width: none; padding: 9px 12px; }
 }
 `;
 
