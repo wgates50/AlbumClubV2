@@ -56,6 +56,11 @@ const last = new Date(y, mm, 0).getDate();
 return Math.max(0, last - new Date().getDate());
 };
 const RELEASE_RE = /^\d{4}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$/;
+/* Short enough to sit beside the artist in a narrow tab. */
+const releaseShort = (d: string) =>
+new Date(`${d.length === 7 ? `${d}-01` : d}T00:00:00Z`).toLocaleDateString("en-GB", {
+day: d.length === 7 ? undefined : "numeric", month: "short", timeZone: "UTC",
+});
 const releaseLabel = (d: string) =>
 new Date(`${d.length === 7 ? `${d}-01` : d}T00:00:00Z`).toLocaleDateString("en-GB", {
 day: d.length === 7 ? undefined : "numeric", month: "long", year: "numeric", timeZone: "UTC",
@@ -995,41 +1000,54 @@ return <Take key={mem.id} member={mem} r={r} />;
    It only accepts a result whose artist agrees: a wrong sleeve is worse than
    the gradient, and it would be silently wrong forever. */
 function ArtworkFinder({ albums, onChanged }: { albums: Album[]; onChanged: () => void }) {
-const missing = useMemo(() => albums.filter((a) => !a.artUrl), [albums]);
+/* Release dates arrived after most of these albums did, so the column is empty
+   for everything already on record — and an empty date is why nothing was
+   flagged as unreleased. The same Apple lookup fills both gaps in one pass. */
+const missing = useMemo(() => albums.filter((a) => !a.artUrl || !a.releaseDate), [albums]);
+const noArt = useMemo(() => albums.filter((a) => !a.artUrl).length, [albums]);
+const noDate = useMemo(() => albums.filter((a) => !a.releaseDate).length, [albums]);
 const [busy, setBusy] = useState(false);
 const [note, setNote] = useState("");
-const [report, setReport] = useState<{ found: number; skipped: number } | null>(null);
+const [report, setReport] = useState<{ art: number; dates: number; skipped: number } | null>(null);
 const [picking, setPicking] = useState<Album | null>(null);
 
 const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const run = async () => {
 setBusy(true); setReport(null);
-let found = 0;
+let art = 0;
+let dates = 0;
 let skipped = 0;
 for (let i = 0; i < missing.length; i++) {
 const a = missing[i];
 setNote(`Looking up ${i + 1} of ${missing.length} — ${a.title}`);
 const res = await api(`/api/search?q=${encodeURIComponent(`${a.artist} ${a.title}`)}`);
-const results = ((res.data.results ?? []) as Result[]).filter((r) => r.artUrl);
+const results = (res.data.results ?? []) as Result[];
 const want = norm(a.artist);
 const hit =
 results.find((r) => norm(r.artist) === want) ??
 results.find((r) => norm(r.artist).includes(want) || want.includes(norm(r.artist)));
 if (!hit) { skipped += 1; continue; }
-const saved = await api("/api/albums", {
-method: "PATCH",
-body: JSON.stringify({
-id: a.id, artUrl: hit.artUrl,
-appleUrl: a.appleUrl ?? hit.appleUrl,
-year: a.year ?? hit.year,
-}),
-});
-if (saved.ok) found += 1; else skipped += 1;
+
+const patch: Record<string, unknown> = { id: a.id };
+if (!a.artUrl && hit.artUrl) { patch.artUrl = hit.artUrl; patch.appleUrl = a.appleUrl ?? hit.appleUrl; }
+if (a.year === null && hit.year) patch.year = hit.year;
+/* A date past the album's month would be refused, and rightly — but this is
+   history, already listened to and scored. Take the artwork and leave the
+   date rather than failing the whole row over it. */
+if (!a.releaseDate && hit.releaseDate && !releaseTooLate(hit.releaseDate, a.month))
+patch.releaseDate = hit.releaseDate;
+
+if (Object.keys(patch).length === 1) { skipped += 1; continue; }
+const saved = await api("/api/albums", { method: "PATCH", body: JSON.stringify(patch) });
+if (saved.ok) {
+if (patch.artUrl) art += 1;
+if (patch.releaseDate) dates += 1;
+} else skipped += 1;
 await new Promise((r) => setTimeout(r, 300)); /* Apple rate-limits bursts */
 }
 setBusy(false); setNote("");
-setReport({ found, skipped });
+setReport({ art, dates, skipped });
 onChanged();
 };
 
@@ -1037,34 +1055,38 @@ if (!albums.length) return null;
 
 return (
 <>
-<p className="eyebrow mt34 mb16">Artwork</p>
+<p className="eyebrow mt34 mb16">Artwork &amp; release dates</p>
 {missing.length === 0 ? (
-<p className="muted">Every album has a sleeve.</p>
+<p className="muted">Every album has a sleeve and a release date.</p>
 ) : (
 <>
 <p className="muted mb12">
-{missing.length} {missing.length === 1 ? "album has" : "albums have"} no sleeve and fall
-back to a gradient. This searches Apple&rsquo;s catalogue and fills in the ones it can
-match with confidence.
+{noArt > 0 && <>{noArt} {noArt === 1 ? "album has" : "albums have"} no sleeve and fall back to a gradient. </>}
+{noDate > 0 && (
+<>{noDate} {noDate === 1 ? "has" : "have"} no release date, which is why nothing older is
+marked as still to come. </>
+)}
+This searches Apple&rsquo;s catalogue and fills in what it can match with confidence.
 </p>
 <button className="btn" disabled={busy} onClick={run}>
-{busy ? "Searching…" : `Find artwork for ${missing.length}`}
+{busy ? "Searching…" : `Look up ${missing.length} album${missing.length === 1 ? "" : "s"}`}
 </button>
 </>
 )}
 {note && <p className="muted mt8">{note}</p>}
 {report && (
 <p className="muted mt14">
-Found {report.found} sleeve{report.found === 1 ? "" : "s"}.
-{report.skipped > 0 && ` ${report.skipped} still to do — pick those below.`}
+Filled in {report.art} sleeve{report.art === 1 ? "" : "s"} and {report.dates} release
+date{report.dates === 1 ? "" : "s"}.
+{report.skipped > 0 && ` ${report.skipped} couldn't be matched — pick those below.`}
 </p>
 )}
 
 {/* Whatever the automatic pass can't place is listed here to sort out by
     eye, rather than left as a list of names you can do nothing with. */}
-{missing.length > 0 && (
+{noArt > 0 && (
 <div className="art-todo">
-{missing.map((a) => (
+{albums.filter((a) => !a.artUrl).map((a) => (
 <button className="art-todo-row" key={a.id} onClick={() => setPicking(a)}>
 <Thumb album={a} size={40} />
 <span className="min0">
@@ -1452,7 +1474,10 @@ title={done ? "You've scored this" : "You haven't scored this yet"} />
 {by ? `${by.name}${by.id === state.me ? " (you)" : ""}` : "Unclaimed"}
 </span>
 <span className="album-tab-title">{a.title}</span>
-<span className="album-tab-sub">{a.artist}</span>
+<span className="album-tab-sub">
+{notOutYet(a.releaseDate) && <em className="soon">Out {releaseShort(a.releaseDate!)} · </em>}
+{a.artist}
+</span>
 </span>
 </button>
 );

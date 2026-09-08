@@ -1381,6 +1381,7 @@ label.field > span {
 .album-tab-title { font-family: var(--font-display); font-size: 17px; line-height: 1.2; color: inherit;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-tab-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-tab-sub .soon { color: var(--warn); font-style: normal; }
 
 /* ---- whose pick this is ---- */
 .album-chooser { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 12px;
