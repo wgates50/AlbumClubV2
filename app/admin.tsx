@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fallbackArt } from "./lib/art";
 import ArtworkPicker from "./artwork";
 
@@ -17,6 +17,7 @@ type Rating = {
 
 type Props = { albums: Album[]; members: Member[]; ratings: Rating[]; onChanged: () => void };
 type Status = { configured: boolean; unlocked: boolean };
+type Filter = "all" | "noart" | "zero";
 
 async function call(url: string, init?: RequestInit) {
   const res = await fetch(url, init?.body ? { headers: { "content-type": "application/json" }, ...init } : init);
@@ -32,20 +33,48 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [pickedId, setPickedId] = useState<string>("");
+  const [openId, setOpenId] = useState<string | null>(null);
   const [saved, setSaved] = useState("");
-const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<Album | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
 
-  /* Ask once on first render what the server thinks. */
-  useMemo(() => {
+  useEffect(() => {
     void call("/api/admin").then((r) => setStatus(r.data as unknown as Status));
   }, []);
 
-  const sorted = useMemo(
-    () => [...albums].sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : a.title.localeCompare(b.title))),
-    [albums],
-  );
-  const album = sorted.find((a) => a.id === pickedId) ?? sorted[0] ?? null;
+  const ratingsFor = useMemo(() => {
+    const by = new Map<string, Rating[]>();
+    for (const r of ratings) {
+      if (!by.has(r.albumId)) by.set(r.albumId, []);
+      by.get(r.albumId)!.push(r);
+    }
+    return by;
+  }, [ratings]);
+
+  /* Newest first, and every row carries the two things worth spotting at a
+     glance: whether it has a sleeve, and whether anyone left a bare zero. */
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return albums
+      .map((a) => {
+        const rs = ratingsFor.get(a.id) ?? [];
+        return { a, rs, noArt: !a.artUrl, hasZero: rs.some((r) => r.score === 0 && !r.skipped) };
+      })
+      .filter(({ a, noArt, hasZero }) => {
+        if (filter === "noart" && !noArt) return false;
+        if (filter === "zero" && !hasZero) return false;
+        if (q && !`${a.title} ${a.artist}`.toLowerCase().includes(q)) return false;
+        return true;
+      })
+      .sort((x, y) => (x.a.month < y.a.month ? 1 : x.a.month > y.a.month ? -1 : x.a.title.localeCompare(y.a.title)));
+  }, [albums, ratingsFor, filter, search]);
+
+  const counts = useMemo(() => ({
+    all: albums.length,
+    noart: albums.filter((a) => !a.artUrl).length,
+    zero: albums.filter((a) => (ratingsFor.get(a.id) ?? []).some((r) => r.score === 0 && !r.skipped)).length,
+  }), [albums, ratingsFor]);
 
   const unlock = async () => {
     setBusy(true); setError("");
@@ -63,9 +92,8 @@ const [picking, setPicking] = useState(false);
 
   const flash = (m: string) => { setSaved(m); setTimeout(() => setSaved(""), 2200); };
 
-  const saveRating = async (memberId: string, patch: { score?: number | null; review?: string; skipped?: boolean }) => {
-    if (!album) return;
-    const existing = ratings.find((r) => r.albumId === album.id && r.memberId === memberId);
+  const saveRating = async (album: Album, memberId: string, patch: { score?: number | null; review?: string; skipped?: boolean }) => {
+    const existing = (ratingsFor.get(album.id) ?? []).find((r) => r.memberId === memberId);
     const res = await call("/api/ratings", {
       method: "PUT",
       body: JSON.stringify({
@@ -79,17 +107,15 @@ const [picking, setPicking] = useState(false);
     if (res.ok) { onChanged(); flash("Saved"); } else setError(String(res.data.error ?? "Couldn't save"));
   };
 
-  const saveAlbum = async (patch: Partial<Album>) => {
-    if (!album) return;
+  const saveAlbum = async (album: Album, patch: Partial<Album>) => {
     const res = await call("/api/albums", { method: "PATCH", body: JSON.stringify({ id: album.id, ...patch }) });
     if (res.ok) { onChanged(); flash("Saved"); } else setError(String(res.data.error ?? "Couldn't save"));
   };
 
-  const removeAlbum = async () => {
-    if (!album) return;
+  const removeAlbum = async (album: Album) => {
     if (!confirm(`Delete "${album.title}" and every score and review on it? This can't be undone.`)) return;
     const res = await call(`/api/albums?id=${encodeURIComponent(album.id)}`, { method: "DELETE" });
-    if (res.ok) { setPickedId(""); onChanged(); flash("Deleted"); }
+    if (res.ok) { setOpenId(null); onChanged(); flash("Deleted"); }
     else setError(String(res.data.error ?? "Couldn't delete"));
   };
 
@@ -127,119 +153,155 @@ const [picking, setPicking] = useState(false);
     );
   }
 
+  const FILTERS: [Filter, string, number][] = [
+    ["all", "Everything", counts.all],
+    ["noart", "No artwork", counts.noart],
+    ["zero", "Scored zero", counts.zero],
+  ];
+
   return (
     <div className="admin">
       <div className="up-head">
-        <p className="eyebrow">Admin — editing as anyone</p>
+        <div className="up-views">
+          {FILTERS.map(([f, label, n]) => (
+            <button key={f} className="up-view" aria-selected={filter === f} onClick={() => setFilter(f)}>
+              {label}{n > 0 && ` (${n})`}
+            </button>
+          ))}
+        </div>
         <div className="up-actions">
           <span className={`saved ${saved ? "on" : ""}`}>{saved}</span>
           <button className="btn sm ghost" onClick={lock}>Lock</button>
         </div>
       </div>
 
+      <input type="text" className="up-search" placeholder="Search albums…"
+        value={search} onChange={(e) => setSearch(e.target.value)} />
+
       {error && <p className="error">{error}</p>}
-      {!album ? (
-        <p className="up-empty">No albums yet.</p>
-      ) : (
-        <>
-          <label className="field">
-            <span>Album</span>
-            <select value={album.id} onChange={(e) => setPickedId(e.target.value)}>
-              {sorted.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {monthLabel(a.month)} — {a.title} · {a.artist}
-                </option>
-              ))}
-            </select>
-          </label>
+      {!rows.length && (
+        <p className="up-empty">
+          {filter === "noart" ? "Every album has a sleeve."
+            : filter === "zero" ? "Nobody has left a bare zero."
+            : "Nothing matches that."}
+        </p>
+      )}
 
-          <p className="eyebrow mt34 mb16">Scores and reviews</p>
-          {members.map((m) => {
-            const r = ratings.find((x) => x.albumId === album.id && x.memberId === m.id);
-            return (
-              <div className="admin-row" key={m.id}>
-                <div className="admin-who">
-                  <i className="pip" style={{ background: m.color }} />
-                  <span>{m.name}</span>
-                </div>
-                <div className="admin-fields">
-                  <input type="number" min={0} max={10} step={0.1} className="admin-score"
-                    aria-label={`${m.name}'s score`}
-                    value={r?.score ?? ""} placeholder="—"
-                    disabled={r?.skipped ?? false}
-                    onChange={(e) => {
-                      const v = e.target.value.trim();
-                      void saveRating(m.id, { score: v === "" ? null : Math.min(10, Math.max(0, Number(v))) });
-                    }} />
-                  <button className={`btn sm ghost${r?.skipped ? " on" : ""}`}
-                    onClick={() => saveRating(m.id, { skipped: !r?.skipped, score: null })}>
-                    {r?.skipped ? "Skipped" : "Mark skipped"}
-                  </button>
-                </div>
-                <textarea defaultValue={r?.review ?? ""} placeholder={`${m.name}'s review`}
-                  onBlur={(e) => { if (e.target.value !== (r?.review ?? "")) void saveRating(m.id, { review: e.target.value }); }} />
-              </div>
-            );
-          })}
+      <div className="adm-list">
+        {rows.map(({ a, rs, noArt, hasZero }) => {
+          const isOpen = openId === a.id;
+          const chooser = members.find((m) => m.id === a.chosenBy);
+          return (
+            <div className={`adm-item${isOpen ? " open" : ""}`} key={a.id}>
+              <button className="adm-row" onClick={() => setOpenId(isOpen ? null : a.id)} aria-expanded={isOpen}>
+                <span className={`adm-art${noArt ? " none" : ""}`}
+                  style={a.artUrl ? undefined : { background: fallbackArt(a.artist + a.title) }}>
+                  {a.artUrl ? <img src={a.artUrl} alt="" loading="lazy" /> : <span className="adm-art-tag">no art</span>}
+                </span>
+                <span className="adm-meta">
+                  <span className="adm-title">{a.title}</span>
+                  <span className="adm-sub">
+                    {a.artist} · {monthLabel(a.month)}{chooser ? ` · ${chooser.name}` : ""}
+                  </span>
+                </span>
+                <span className="adm-scores">
+                  {members.map((m) => {
+                    const r = rs.find((x) => x.memberId === m.id);
+                    const zero = r?.score === 0 && !r.skipped;
+                    return (
+                      <span key={m.id} className={`adm-score${zero ? " zero" : ""}${r?.skipped ? " skip" : ""}`}
+                        title={`${m.name}: ${r?.skipped ? "skipped" : r?.score ?? "no score"}`}>
+                        <i className="pip" style={{ background: m.color }} />
+                        {r?.skipped ? "skip" : r?.score ?? "—"}
+                      </span>
+                    );
+                  })}
+                </span>
+                {hasZero && <span className="adm-flag" title="Someone scored this zero">0</span>}
+              </button>
 
-          <p className="eyebrow mt34 mb16">This album</p>
-          <div className="admin-album">
-            <div className="admin-art" style={album.artUrl ? undefined : { background: fallbackArt(album.artist + album.title) }}>
-              {album.artUrl && <img src={album.artUrl} alt="" />}
-            </div>
-            <div className="grow">
-              <label className="field">
-                <span>Artwork</span>
-                <div className="flex gap8">
-                  <input type="text" defaultValue={album.artUrl ?? ""} placeholder="Pick one, or paste a URL"
-                    onBlur={(e) => { if (e.target.value !== (album.artUrl ?? "")) void saveAlbum({ artUrl: e.target.value || null }); }} />
-                  <button className="btn" onClick={() => setPicking(true)}>Find&hellip;</button>
+              {isOpen && (
+                <div className="adm-edit">
+                  {members.map((m) => {
+                    const r = rs.find((x) => x.memberId === m.id);
+                    return (
+                      <div className="admin-row" key={m.id}>
+                        <div className="admin-who">
+                          <i className="pip" style={{ background: m.color }} />
+                          <span>{m.name}</span>
+                        </div>
+                        <div className="admin-fields">
+                          <input type="number" min={0} max={10} step={0.1} className="admin-score"
+                            aria-label={`${m.name}'s score for ${a.title}`}
+                            value={r?.score ?? ""} placeholder="—" disabled={r?.skipped ?? false}
+                            onChange={(e) => {
+                              const v = e.target.value.trim();
+                              void saveRating(a, m.id, { score: v === "" ? null : Math.min(10, Math.max(0, Number(v))) });
+                            }} />
+                          <button className={`btn sm ghost${r?.skipped ? " on" : ""}`}
+                            onClick={() => saveRating(a, m.id, { skipped: !r?.skipped, score: null })}>
+                            {r?.skipped ? "Skipped" : "Mark skipped"}
+                          </button>
+                        </div>
+                        <textarea defaultValue={r?.review ?? ""} placeholder={`${m.name}'s review`}
+                          onBlur={(e) => { if (e.target.value !== (r?.review ?? "")) void saveRating(a, m.id, { review: e.target.value }); }} />
+                      </div>
+                    );
+                  })}
+
+                  <div className="grid3 mt14">
+                    <label className="field">
+                      <span>Title</span>
+                      <input type="text" defaultValue={a.title}
+                        onBlur={(e) => { if (e.target.value.trim() && e.target.value !== a.title) void saveAlbum(a, { title: e.target.value.trim() }); }} />
+                    </label>
+                    <label className="field">
+                      <span>Artist</span>
+                      <input type="text" defaultValue={a.artist}
+                        onBlur={(e) => { if (e.target.value.trim() && e.target.value !== a.artist) void saveAlbum(a, { artist: e.target.value.trim() }); }} />
+                    </label>
+                    <label className="field">
+                      <span>Year</span>
+                      <input type="number" defaultValue={a.year ?? ""} placeholder="—"
+                        onBlur={(e) => void saveAlbum(a, { year: e.target.value ? Number(e.target.value) : null })} />
+                    </label>
+                  </div>
+                  <div className="grid3">
+                    <label className="field">
+                      <span>Month</span>
+                      <input type="month" defaultValue={a.month}
+                        onBlur={(e) => { if (/^\d{4}-\d{2}$/.test(e.target.value) && e.target.value !== a.month) void saveAlbum(a, { month: e.target.value }); }} />
+                    </label>
+                    <label className="field">
+                      <span>Chosen by</span>
+                      <select value={a.chosenBy ?? ""} onChange={(e) => void saveAlbum(a, { chosenBy: e.target.value || null })}>
+                        <option value="">Nobody</option>
+                        {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Spotify link</span>
+                      <input type="text" defaultValue={a.spotifyUrl ?? ""} placeholder="https://open.spotify.com/…"
+                        onBlur={(e) => { if (e.target.value !== (a.spotifyUrl ?? "")) void saveAlbum(a, { spotifyUrl: e.target.value || null }); }} />
+                    </label>
+                  </div>
+
+                  <div className="flex gap8 wrap">
+                    <button className="btn sm" onClick={() => setPicking(a)}>
+                      {a.artUrl ? "Change artwork" : "Find artwork"}
+                    </button>
+                    <button className="btn sm danger" onClick={() => removeAlbum(a)}>Delete album</button>
+                  </div>
+                  <p className="muted mt14">Every field saves when you click away from it.</p>
                 </div>
-              </label>
-              <div className="grid3">
-                <label className="field">
-                  <span>Title</span>
-                  <input type="text" defaultValue={album.title}
-                    onBlur={(e) => { if (e.target.value.trim() && e.target.value !== album.title) void saveAlbum({ title: e.target.value.trim() }); }} />
-                </label>
-                <label className="field">
-                  <span>Artist</span>
-                  <input type="text" defaultValue={album.artist}
-                    onBlur={(e) => { if (e.target.value.trim() && e.target.value !== album.artist) void saveAlbum({ artist: e.target.value.trim() }); }} />
-                </label>
-                <label className="field">
-                  <span>Year</span>
-                  <input type="number" defaultValue={album.year ?? ""} placeholder="—"
-                    onBlur={(e) => void saveAlbum({ year: e.target.value ? Number(e.target.value) : null })} />
-                </label>
-              </div>
-              <div className="grid3">
-                <label className="field">
-                  <span>Month</span>
-                  <input type="month" defaultValue={album.month}
-                    onBlur={(e) => { if (/^\d{4}-\d{2}$/.test(e.target.value) && e.target.value !== album.month) void saveAlbum({ month: e.target.value }); }} />
-                </label>
-                <label className="field">
-                  <span>Chosen by</span>
-                  <select value={album.chosenBy ?? ""} onChange={(e) => void saveAlbum({ chosenBy: e.target.value || null })}>
-                    <option value="">Nobody</option>
-                    {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Spotify link</span>
-                  <input type="text" defaultValue={album.spotifyUrl ?? ""} placeholder="https://open.spotify.com/…"
-                    onBlur={(e) => { if (e.target.value !== (album.spotifyUrl ?? "")) void saveAlbum({ spotifyUrl: e.target.value || null }); }} />
-                </label>
-              </div>
-              <button className="btn sm danger" onClick={removeAlbum}>Delete this album</button>
+              )}
             </div>
-          </div>
-          <p className="muted mt14">Every field saves when you click away from it.</p>
-          {picking && (
-            <ArtworkPicker album={album} onClose={() => setPicking(false)} onSaved={onChanged} />
-          )}
-        </>
+          );
+        })}
+      </div>
+
+      {picking && (
+        <ArtworkPicker album={picking} onClose={() => setPicking(null)} onSaved={onChanged} />
       )}
     </div>
   );
