@@ -169,8 +169,6 @@ a {
   flex-wrap: wrap;
 }
 
-.tab-short { display: none; }
-
 .tab {
   background: none;
   border: 0;
@@ -1102,16 +1100,17 @@ label.field > span {
      wrapped nav would cost ~130px of every screen for as long as you use it. */
   .tabs {
     order: 3; width: 100%; margin-left: 0;
-    flex-wrap: nowrap; overflow-x: visible;
-    gap: 0; justify-content: space-between;
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    margin-inline: -16px; padding-inline: 16px;
+    /* Fades the last tab out at the right edge, so a strip with more in it
+       looks like one rather than like a tab that got cut off. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
   }
-  .tab {
-    flex: 1 1 0; min-width: 0; text-align: center;
-    font-size: 11px; letter-spacing: 0.05em; padding: 8px 2px;
-  }
-  .tab-long { display: none; }
-  .tab-short { display: inline; }
-  .tab-dot { margin-left: 4px; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; scroll-snap-align: start; }
   /* Safari zooms the whole page when you focus a field under 16px, and never
      zooms back out — writing a review on a phone shouldn't do that. */
   textarea,

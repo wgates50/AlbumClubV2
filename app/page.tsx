@@ -507,12 +507,18 @@ releaseDate: string | null;
 };
 
 function AlbumModal({
-album, month, members, me, onClose, onSaved,
+album, month, members, me, ratings = [], replacing = false, onClose, onSaved,
 }: {
 album: Album | null; month: string; members: Member[]; me: string | null;
+ratings?: Rating[]; replacing?: boolean;
 onClose: () => void; onSaved: () => void;
 }) {
 const editing = Boolean(album);
+/* Whether swapping this record would take anyone's verdict with it. */
+const losing = replacing && album
+? members.filter((m) => m.id !== me && ratings.some(
+(r) => r.albumId === album.id && r.memberId === m.id && (r.score !== null || r.review || r.skipped)))
+: [];
 const [query, setQuery] = useState("");
 const [results, setResults] = useState<Result[]>([]);
 const [searching, setSearching] = useState(false);
@@ -575,6 +581,7 @@ const res = await api("/api/albums", {
 method: editing ? "PATCH" : "POST",
 body: JSON.stringify({
 ...(editing ? { id: album!.id } : {}),
+...(replacing ? { replace: true } : {}),
 title: form.title, artist: form.artist,
 year: form.releaseDate ? Number(form.releaseDate.slice(0, 4)) : form.year ? Number(form.year) : null,
 artUrl: form.artUrl || null, appleUrl: form.appleUrl || null,
@@ -605,14 +612,27 @@ const dueLater = !tooLate && notOutYet(form.releaseDate);
 return (
 <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
 <div className="modal" role="dialog" aria-modal="true">
-<h2>{editing ? "Edit album" : "Add an album"}</h2>
+<h2>{replacing ? "Change your pick" : editing ? "Edit album" : "Add an album"}</h2>
 <p className="lede sm">
-{editing
+{replacing
+? "Search for the record you would rather put in. Everything else about the month stays as it is."
+: editing
 ? "Fix the details, swap the artwork, or move it to another month."
 : "Search and the artwork, year and tracklist come with it. Or fill it in by hand."}
 </p>
 
-{!editing && (
+{losing.length > 0 && (
+<div className="notice bad mb16">
+<span className="badge">Careful</span>
+<div>
+{losing.map((m) => m.name).join(" and ")} {losing.length === 1 ? "has" : "have"} already
+scored this. Putting a different record in will clear
+{losing.length === 1 ? " their verdict" : " their verdicts"}, since they were about this one.
+</div>
+</div>
+)}
+
+{(!editing || replacing) && (
 <label className="field">
 <span>Search</span>
 <input type="text" autoFocus value={query} placeholder="Artist and album — e.g. Burial Untrue"
@@ -1259,6 +1279,7 @@ typeof window !== "undefined" && new URLSearchParams(window.location.search).has
 const [cursor, setCursor] = useState(thisMonth());
 const [openAlbum, setOpenAlbum] = useState<string | null>(null);
 const [adding, setAdding] = useState(false);
+const [swapping, setSwapping] = useState<Album | null>(null);
 
 const load = useCallback(async () => {
 const res = await api("/api/state");
@@ -1287,6 +1308,12 @@ const shown = useMemo(
    it can flag an unmade pick from any tab. */
 const owesPick = Boolean(
 state?.me && !state.albums.some((a) => a.month === state.currentMonth && a.chosenBy === state.me),
+);
+
+/* The pick belonging to whoever is signed in, for the month on screen. */
+const myPick = useMemo(
+() => monthAlbums.find((a) => a.chosenBy === state?.me) ?? null,
+[monthAlbums, state?.me],
 );
 
 const scoredByMe = useMemo(() => {
@@ -1324,19 +1351,16 @@ return (
 {state.clubName.replace(/\s*club\s*$/i, "")}<span className="dot"> Club</span>
 </div>
 <nav className="tabs" role="tablist">
-{([
-["month", "This month", "Month"], ["upcoming", "Upcoming", "Soon"],
-["archive", "Archive", "Past"], ["table", "Leaderboard", "Table"],
-["club", "Club", "Club"], ["admin", "Admin", "Admin"],
-] as [Tab, string, string][]).map(([id, text, short]) => (
+{([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"], ["admin", "Admin"]] as [Tab, string][]).map(
+([id, text]) => (
 <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-<span className="tab-long">{text}</span>
-<span className="tab-short" aria-hidden="true">{short}</span>
+{text}
 {id === "month" && owesPick && (
 <i className="tab-dot" title="You haven't picked for this month" />
 )}
 </button>
-))}
+),
+)}
 </nav>
 <button className="whoami" onClick={() => setTab("club")}>
 <i className="pip" style={{ background: meMember?.color ?? "var(--muted)" }} />
@@ -1391,7 +1415,11 @@ onAdd={() => setAdding(true)} onBrowse={() => setTab("upcoming")} onPicked={load
 <span className="eyebrow">you&rsquo;ve done {scoredByMe} of {monthAlbums.length}</span>
 </>
 )}
+{myPick ? (
+<button className="btn sm right" onClick={() => setSwapping(myPick)}>Change my pick</button>
+) : (
 <button className="btn sm right" onClick={() => setAdding(true)}><Plus /> Add album</button>
+)}
 </div>
 
 {monthAlbums.length === 0 ? (
@@ -1461,6 +1489,10 @@ albums={state.albums} onChanged={load} />
 {adding && (
 <AlbumModal album={null} month={cursor} members={state.members} me={state.me}
 onClose={() => setAdding(false)} onSaved={load} />
+)}
+{swapping && (
+<AlbumModal album={swapping} month={cursor} members={state.members} me={state.me}
+ratings={state.ratings} replacing onClose={() => setSwapping(null)} onSaved={load} />
 )}
 </div>
 );

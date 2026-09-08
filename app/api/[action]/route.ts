@@ -180,6 +180,13 @@ await ready();
 await db().query(`delete from ratings where album_id=$1`, [id]);
 await db().query(`delete from albums where id=$1`, [id]);
 }
+/* Swapping one record for another leaves any scores on it attached to
+   something nobody heard. */
+async function clearRatingsFor(albumId: string): Promise<void> {
+if (!hasDb) { pv.ratings = pv.ratings.filter((r) => r.albumId !== albumId); return; }
+await ready();
+await db().query(`delete from ratings where album_id=$1`, [albumId]);
+}
 async function listRatings(): Promise<Rating[]> {
 if (!hasDb) return [...pv.ratings];
 await ready();
@@ -1121,6 +1128,18 @@ return bad("Release date should look like 2026-09-18");
 if (releaseTooLate(next.releaseDate, next.month))
 return bad(`${next.title} isn't out until ${releaseLabel(next.releaseDate!)}, which is after ${monthName(next.month)}.`);
 if (next.year === null && next.releaseDate) next.year = Number(next.releaseDate.slice(0, 4));
+
+/* "replace" says this is a member swapping their pick, not an admin correcting
+   a typo — the difference matters, because only the first should take anyone's
+   scores with it. An ordinary edit never clears a rating. */
+if (b.replace === true) {
+if (ex.chosenBy !== auth.memberId && !(await isAdmin()))
+return bad("Only whoever picked an album can change it", 403);
+const differentRecord =
+next.title.toLowerCase().trim() !== ex.title.toLowerCase().trim() ||
+next.artist.toLowerCase().trim() !== ex.artist.toLowerCase().trim();
+if (differentRecord) await clearRatingsFor(ex.id);
+}
 await saveAlbum(next);
 return J({ ok: true, album: next });
 }
