@@ -291,6 +291,16 @@ if (!hasDb) return;
 await ready();
 await db().query(`delete from shortlist where member_id=$1 and id=$2`, [memberId, id]);
 }
+/* Everything Upcoming knows about one member, so they can start it again from
+   nothing. The shortlist is theirs whether or not the scan was any good, so it
+   only goes when they say so. */
+async function clearUpcoming(memberId: string, alsoShortlist: boolean): Promise<void> {
+if (!hasDb) return;
+await ready();
+await db().query(`delete from music_accounts where member_id=$1`, [memberId]);
+await db().query(`delete from tracked_artists where member_id=$1`, [memberId]);
+if (alsoShortlist) await db().query(`delete from shortlist where member_id=$1`, [memberId]);
+}
 
 /* Spotify tokens live here rather than in the browser, so a member's scan works
    from any device. Refreshing is done server-side and the fresh access token is
@@ -968,6 +978,11 @@ return res;
 
 if (r === "spotify" || r === "youtube") {
 await deleteAccount(auth.memberId);
+return J({ ok: true });
+}
+
+if (r === "upcoming") {
+await clearUpcoming(auth.memberId, req.nextUrl.searchParams.get("shortlist") === "1");
 return J({ ok: true });
 }
 

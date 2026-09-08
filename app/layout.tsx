@@ -13,6 +13,7 @@ initialScale: 1,
 
 const CSS = `
 :root {
+  color-scheme: dark;
   --bg: #0b0a09;
   --bg-2: #100f0d;
   --surface: #16140f;
@@ -535,6 +536,7 @@ textarea,
 input[type="text"],
 input[type="password"],
 input[type="number"],
+input[type="month"],
 select {
   width: 100%;
   background: var(--bg-2);
@@ -738,9 +740,15 @@ label.field > span {
   background: none;
 }
 
+.btn.danger {
+  border-color: rgba(232, 128, 79, 0.42);
+  color: var(--warn);
+}
+
 .btn.danger:hover:not(:disabled) {
-  border-color: #b4523f;
-  color: #e08b78;
+  border-color: var(--warn);
+  background: rgba(232, 128, 79, 0.1);
+  color: #f0a184;
 }
 
 .btn.sm {
@@ -1092,6 +1100,7 @@ label.field > span {
   input[type="text"],
   input[type="password"],
   input[type="number"],
+  input[type="month"],
   select { font-size: 16px; }
   .month-meta { gap: 10px; }
   .month-meta .right { margin-left: 0; width: 100%; justify-content: center; }
@@ -1231,6 +1240,14 @@ label.field > span {
 .up-artist-name { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-artist-row.muted-row { opacity: 0.42; }
 .up-disconnect { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line); }
+.up-reset { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--line); }
+.up-reset-panel { border: 1px solid var(--warn); border-radius: var(--radius);
+  background: rgba(232, 128, 79, 0.05); padding: 16px 18px; max-width: 620px; }
+.up-reset-title { margin: 0 0 6px; font-family: var(--font-display); font-size: 20px; color: var(--text); }
+.up-reset-note { margin: 0 0 14px; font-size: 13.5px; line-height: 1.6; color: var(--text-dim); }
+.up-reset-check { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px;
+  font-size: 13px; color: var(--text-dim); cursor: pointer; }
+.up-reset-check input { accent-color: var(--warn); width: 15px; height: 15px; flex: none; margin-top: 2px; }
 .up-help { margin-top: 22px; }
 .up-help .muted { margin: 10px 0; line-height: 1.6; }
 .up-uri { display: block; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); color: var(--accent); user-select: all; }

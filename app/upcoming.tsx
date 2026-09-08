@@ -95,6 +95,8 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   const [wire, setWire] = useState<Wire | null>(null);
   const [releases, setReleases] = useState<Release[]>([]);
   const [view, setView] = useState<View>("releases");
+  const [resetting, setResetting] = useState(false);
+  const [dropShortlist, setDropShortlist] = useState(false);
   const [filter, setFilter] = useState<Filter>("upcoming");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -341,12 +343,20 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     if (res.ok) setWire((p) => (p ? { ...p, artists: res.data.artists as Tracked[] } : p));
   }, []);
 
-  const disconnect = useCallback(async () => {
-    await call(`/api/${wire?.service === "youtube" ? "youtube" : "spotify"}`, { method: "DELETE" });
+  /* Wipes the connection, the artists on file and any muting, so the next visit
+     starts at the connect screen with nothing carried over. */
+  const startOver = useCallback(async (alsoShortlist: boolean) => {
+    setBusy("Clearing…");
+    await call(`/api/upcoming${alsoShortlist ? "?shortlist=1" : ""}`, { method: "DELETE" });
     setReleases([]);
+    setSearch("");
+    setView("releases");
+    setResetting(false);
+    setDropShortlist(false);
     refreshed.current = false;
     await load();
-  }, [wire, load]);
+    setBusy("");
+  }, [load]);
 
   if (!wire) return <p className="up-empty">Loading…</p>;
 
@@ -602,11 +612,48 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
               </div>
             </details>
           )}
-          <div className="up-disconnect">
-            <button className="btn sm ghost" onClick={disconnect}>Disconnect {serviceName}</button>
-          </div>
         </>
       )}
+
+      {/* Reachable from any of the three views, and it says what it takes
+          before it takes it. */}
+      <div className="up-reset">
+        {!resetting ? (
+          <button className="btn sm ghost" onClick={() => setResetting(true)}>
+            Clear my Upcoming and start over
+          </button>
+        ) : (
+          <div className="up-reset-panel">
+            <p className="up-reset-title">Start over?</p>
+            <p className="up-reset-note">
+              This unlinks {serviceName} and forgets the {wire.artists.length} artist
+              {wire.artists.length === 1 ? "" : "s"} it read from your account, muting included.
+              You will be back at the connect screen. Nothing about the club — picks, scores,
+              reviews — is touched.
+            </p>
+            {shortlist.length > 0 && (
+              <label className="up-reset-check">
+                <input type="checkbox" checked={dropShortlist}
+                  onChange={(e) => setDropShortlist(e.target.checked)} />
+                <span>
+                  Also throw away my shortlist ({shortlist.length} record
+                  {shortlist.length === 1 ? "" : "s"}). Left alone otherwise.
+                </span>
+              </label>
+            )}
+            <div className="flex gap8 wrap">
+              <button className="btn sm danger" disabled={Boolean(busy)}
+                onClick={() => startOver(dropShortlist)}>
+                {busy ? "Clearing…" : "Yes, clear it"}
+              </button>
+              <button className="btn sm ghost" disabled={Boolean(busy)}
+                onClick={() => { setResetting(false); setDropShortlist(false); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
