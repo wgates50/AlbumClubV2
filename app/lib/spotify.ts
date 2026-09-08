@@ -165,6 +165,7 @@ function guard(signal: AbortSignal | undefined, ms: number) {
 async function api<T>(token: string, endpoint: string, opts: { signal?: AbortSignal; retries?: number } = {}): Promise<T> {
   const { signal } = opts;
   let retries = opts.retries ?? 2;
+  let waits = 0;
   for (;;) {
     const g = guard(signal, 12000);
     let res: Response;
@@ -174,7 +175,9 @@ async function api<T>(token: string, endpoint: string, opts: { signal?: AbortSig
       g.release();
     }
     if (res.status === 429) {
-      throw new RateLimited(parseInt(res.headers.get("Retry-After") ?? "1", 10) || 1);
+      const after = parseInt(res.headers.get("Retry-After") ?? "1", 10) || 1;
+      if (after <= 8 && waits < 3) { waits += 1; await sleep(after * 1000, signal); continue; }
+      throw new RateLimited(after);
     }
     if (res.status === 401 && retries > 0) {
       retries -= 1;
@@ -254,6 +257,7 @@ export async function fetchPlaylists(): Promise<Playlist[]> {
 export async function fetchArtistsFromPlaylists(
   playlistIds: string[],
   onProgress?: (m: string) => void,
+  signal?: AbortSignal,
 ): Promise<SpotifyArtist[]> {
   const token = await serverToken();
   const ids = new Set<string>();
@@ -277,24 +281,37 @@ export async function fetchArtistsFromPlaylists(
     if (i < playlistIds.length - 1) await sleep(100);
   }
 
-  /* Names and pictures come back 50 at a time. A failed batch is retried once
-     and then skipped rather than losing the whole scan. */
+  /* Names and pictures come back 50 at a time. Saving replaces the stored
+     library wholesale, so a batch that cannot be read is not something to skip
+     past — half a library saved over a whole one is worse than no save. Each
+     batch is retried with a widening gap, and a batch that will not come back
+     fails the whole pass so nothing is overwritten. */
   const all = Array.from(ids);
   const artists: SpotifyArtist[] = [];
+  let pause = 300;
   for (let i = 0; i < all.length; i += 50) {
     onProgress?.(`Naming artists… ${Math.min(i + 50, all.length)}/${all.length}`);
     const batch = all.slice(i, i + 50).join(",");
-    try {
-      const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`);
-      artists.push(...d.artists.filter(Boolean).map((a) => toArtist(a as RawArtist)));
-    } catch {
-      await sleep(3000);
+    for (let attempt = 0; ; attempt++) {
       try {
-        const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`);
+        const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`, { signal });
         artists.push(...d.artists.filter(Boolean).map((a) => toArtist(a as RawArtist)));
-      } catch { /* skip this batch */ }
+        pause = Math.max(300, Math.round(pause * 0.8));
+        break;
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") throw err;
+        if (attempt >= 4) {
+          throw new Error(
+            `Spotify stopped answering after naming ${artists.length} of ${all.length} artists. ` +
+            `Your artist list has been left as it was — try again in a few minutes.`,
+          );
+        }
+        const wait = err instanceof RateLimited ? Math.min(err.retryAfter, 30) : 3;
+        await sleep(wait * 1000, signal);
+        pause = Math.min(pause * 2, 3000);
+      }
     }
-    if (i + 50 < all.length) await sleep(300);
+    if (i + 50 < all.length) await sleep(pause, signal);
   }
   return artists;
 }
@@ -378,6 +395,7 @@ export async function fetchReleases(
     }
     i += BATCH;
     scanned = Math.min(i, artists.length);
+    pause = Math.max(250, Math.round(pause * 0.85));
     for (const d of results) {
       for (const al of d.items) {
         if (out.has(al.id)) continue;
