@@ -20,5 +20,6 @@ export function accentVars(hex: string | null | undefined): CSSProperties {
     "--accent": hex,
     "--accent-2": `rgb(${lift(r)}, ${lift(g)}, ${lift(b)})`,
     "--accent-soft": `rgba(${r}, ${g}, ${b}, 0.14)`,
+    "--accent-line": `rgba(${r}, ${g}, ${b}, 0.34)`,
   } as CSSProperties;
 }

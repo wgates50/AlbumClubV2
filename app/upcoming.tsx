@@ -61,7 +61,7 @@ function whenLabel(r: Release): string {
 function humanError(err: unknown, fallback: string): string {
   const msg = err instanceof Error ? err.message : String(err ?? "");
   if (/failed to fetch|networkerror|load failed/i.test(msg)) {
-    return "Couldn't reach the music service just now — check your connection and try Refresh.";
+    return "Couldn't reach the music service just now — check your connection and try again.";
   }
   return msg || fallback;
 }
@@ -462,13 +462,18 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
             </button>
           ))}
         </div>
+        {/* Two different jobs that "Refresh" and "Rescan" did not distinguish:
+            one re-checks the artists on file, the other rebuilds that list from
+            the connected account. */}
         <div className="up-actions">
           <button className="btn sm" disabled={Boolean(busy)}
+            title="Re-check the artists you already track for anything new"
             onClick={() => refreshReleases(wire.artists, wire.service ?? "spotify")}>
-            {busy ? "Working…" : "Refresh"}
+            {busy ? "Working…" : "Check for releases"}
           </button>
-          <button className="btn sm ghost" disabled={Boolean(busy)} onClick={rescan}>
-            Rescan
+          <button className="btn sm ghost" disabled={Boolean(busy)} onClick={rescan}
+            title="Read your library again and rebuild the list of artists you track">
+            Update my artists
           </button>
         </div>
       </div>
@@ -494,7 +499,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
           {!visible.length && !busy && (
             <p className="up-empty">
               {filter === "upcoming"
-                ? "Nothing announced yet. Hit Refresh, or check back — labels announce late."
+                ? "Nothing announced yet. Check for releases again, or come back later — labels announce late."
                 : "Nothing matches this filter."}
             </p>
           )}

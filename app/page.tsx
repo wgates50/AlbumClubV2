@@ -19,9 +19,14 @@ type Rating = {
 albumId: string; memberId: string; score: number | null; review: string;
 favTracks: string[]; skipped: boolean; updatedAt: string;
 };
+type ShortlistItem = {
+id: string; month: string; title: string; artist: string;
+releaseDate: string | null; artUrl: string | null;
+};
 type State = {
 ok: true; mode: "live" | "preview"; me: string | null; members: Member[];
 albums: Album[]; ratings: Rating[]; clubName: string; currentMonth: string;
+myShortlist: ShortlistItem[];
 };
 type Wire = State | { ok: false; needsSetup?: boolean; dbError?: boolean; message?: string };
 type Tab = "month" | "upcoming" | "archive" | "table" | "club" | "admin";
@@ -41,6 +46,13 @@ return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}`;
 const thisMonth = () => {
 const d = new Date();
 return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+/* Whole days left in the month, today included. Only ever asked about the
+   current month, so a local Date is the right clock to read it off. */
+const daysLeftIn = (month: string) => {
+const [y, mm] = month.split("-").map(Number);
+const last = new Date(y, mm, 0).getDate();
+return Math.max(0, last - new Date().getDate());
 };
 const q = (a: Album) => `${a.artist} ${a.title}`.trim();
 const spotify = (a: Album) => a.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(q(a))}/albums`;
@@ -186,10 +198,10 @@ return (
 /* ---------------------------- album card ---------------------------- */
 
 function AlbumCard({
-album, members, ratings, me, onChanged, onEdit,
+album, members, ratings, me, onChanged,
 }: {
 album: Album; members: Member[]; ratings: Rating[]; me: string | null;
-onChanged: () => void; onEdit: (a: Album) => void;
+onChanged: () => void;
 }) {
 /* Whoever picked this record sets its colour for as long as it's on screen. */
 const pickedBy = members.find((m) => m.id === album.chosenBy);
@@ -200,7 +212,6 @@ const [favs, setFavs] = useState<string[]>(mine?.favTracks ?? []);
 const [skipped, setSkipped] = useState(mine?.skipped ?? false);
 const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
 const [newTrack, setNewTrack] = useState("");
-const [picking, setPicking] = useState(false);
 const snapshot = (s: number | null, r: string, f: string[], k: boolean) => JSON.stringify([s, r, f, k]);
 const lastSaved = useRef(snapshot(mine?.score ?? null, mine?.review ?? "", mine?.favTracks ?? [], mine?.skipped ?? false));
 const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -253,28 +264,26 @@ return (
 <div className="album-top">
 <Sleeve album={album} />
 <div>
+{/* Whose record this is comes before anything else about it. */}
+<p className="album-chooser">
+{chooser
+? <><i className="pip" style={{ background: chooser.color }} />{chooser.name}&rsquo;s pick</>
+: <span className="dim">Nobody&rsquo;s pick</span>}
+</p>
 <p className="album-artist">{album.artist}</p>
 <h2 className="album-title display">{album.title}</h2>
 <div className="album-sub">
 {album.year && <span className="mono-num">{album.year}</span>}
-{chooser && (
-<span className="chip"><i className="pip" style={{ background: chooser.color }} />{chooser.name}&rsquo;s pick</span>
-)}
 <span className="chip">{stats.scoredCount}/{stats.total} scored</span>
 {stats.avg !== null && stats.scoredCount > 1 && (
 <span className="chip gold">
 {stats.scoredCount === stats.total ? "club average" : "average so far"} {fmt(stats.avg)}
 </span>
 )}
-<button className="btn ghost sm right" onClick={() => setPicking(true)}>Artwork</button>
-<button className="btn ghost sm" onClick={() => onEdit(album)}>Edit</button>
 </div>
 <ListenRow album={album} />
 </div>
 </div>
-{picking && (
-<ArtworkPicker album={album} onClose={() => setPicking(false)} onSaved={onChanged} />
-)}
 
 <div className="panels">
 <section className="panel">
@@ -365,6 +374,98 @@ others.map((m) => (
 </section>
 </div>
 </article>
+);
+}
+
+/* --------------------------- the nudge to pick --------------------------- */
+
+/* In a three-person club nobody chases anybody, so the app does it. This sits
+   at the top of the month until the pick exists, and sharpens as the month
+   runs out. Shortlisted records become the pick in one click, because the
+   fastest way to stop nagging someone is to make the job trivial. */
+function PickPrompt({
+month, members, me, monthAlbums, shortlist, onAdd, onBrowse, onPicked,
+}: {
+month: string; members: Member[]; me: string; monthAlbums: Album[];
+shortlist: ShortlistItem[]; onAdd: () => void; onBrowse: () => void; onPicked: () => void;
+}) {
+const [busy, setBusy] = useState<string | null>(null);
+const [error, setError] = useState("");
+const l = monthLabel(month);
+const left = daysLeftIn(month);
+const urgent = left <= 5;
+
+const others = members.filter((m) => m.id !== me);
+const waiting = others.filter((m) => monthAlbums.some((a) => a.chosenBy === m.id));
+const names = waiting.map((m) => m.name);
+const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+
+/* Anything already shortlisted is a candidate; ones dated to this month first. */
+const candidates = [...shortlist]
+.sort((a, b) => Number(b.month === month) - Number(a.month === month))
+.slice(0, 3);
+
+const promote = async (item: ShortlistItem) => {
+setBusy(item.id); setError("");
+const res = await api("/api/shortlist", {
+method: "POST",
+body: JSON.stringify({ promote: item.id, month }),
+});
+setBusy(null);
+if (res.ok) onPicked();
+else setError(String(res.data.error ?? "Couldn't make that your pick"));
+};
+
+return (
+<div className={`nudge${urgent ? " urgent" : ""}`}>
+<div className="nudge-bar" aria-hidden="true" />
+<div className="nudge-body">
+<div className="nudge-head">
+<h2 className="nudge-title display">Your {l.name} pick is still blank</h2>
+<span className="nudge-days">
+{left === 0 ? "Last day of the month" : `${left} day${left === 1 ? "" : "s"} left`}
+</span>
+</div>
+<p className="nudge-line">
+{waiting.length === 0
+? "Nobody has put anything in yet. Go first and set the tone."
+: waiting.length === others.length
+? `${list} ${waiting.length === 1 ? "is" : "are"} in. You are the one holding up the month.`
+: `${list} ${waiting.length === 1 ? "is" : "are"} in. You are not.`}
+</p>
+
+{candidates.length > 0 && (
+<>
+<p className="eyebrow mb9">One click from your shortlist</p>
+<div className="nudge-picks">
+{candidates.map((c) => (
+<button key={c.id} className="nudge-pick" disabled={busy !== null} onClick={() => promote(c)}>
+<span className="nudge-pick-art"
+style={c.artUrl ? undefined : { background: fallbackArt(c.artist + c.title) }}>
+{c.artUrl && <img src={c.artUrl} alt="" loading="lazy" />}
+</span>
+<span className="min0">
+<span className="nudge-pick-title">{c.title}</span>
+<span className="nudge-pick-sub">
+{c.artist}
+{/* Shortlisted against a different month — say so before it becomes this one's pick. */}
+{c.month !== month && ` · out ${monthLabel(c.month).name}`}
+</span>
+</span>
+<span className="nudge-pick-go">{busy === c.id ? "…" : "Make it mine"}</span>
+</button>
+))}
+</div>
+</>
+)}
+
+{error && <p className="error">{error}</p>}
+<div className="flex gap8 wrap mt14">
+<button className="btn primary" onClick={onAdd}><Plus /> Add my album</button>
+<button className="btn ghost" onClick={onBrowse}>Find one in Upcoming</button>
+</div>
+</div>
+</div>
 );
 }
 
@@ -700,6 +801,7 @@ return <Take key={mem.id} member={mem} r={r} />;
 const mean = (ns: number[]) => (ns.length ? Math.round((ns.reduce((a, b) => a + b, 0) / ns.length) * 10) / 10 : null);
 
 function Leaderboard({ albums, members, ratings }: { albums: Album[]; members: Member[]; ratings: Rating[] }) {
+const [open, setOpen] = useState<string | null>(null);
 const scored = albums
 .map((a) => ({ a, s: albumStats(a, ratings, members.length) }))
 .filter((x) => x.s.avg !== null)
@@ -757,8 +859,12 @@ All-time table · {scored.length} {scored.length === 1 ? "album" : "albums"} wit
 {scored.map(({ a, s }, i) => {
 const chooser = members.find((x) => x.id === a.chosenBy);
 const l = monthLabel(a.month);
+const isOpen = open === a.id;
 return (
-<div className="row static" key={a.id}>
+<div key={a.id}>
+<div className="row lb" role="button" tabIndex={0} aria-expanded={isOpen}
+onClick={() => setOpen(isOpen ? null : a.id)}
+onKeyDown={(e) => e.key === "Enter" && setOpen(isOpen ? null : a.id)}>
 <span className="rank">{i + 1}</span>
 <div className="flex gap14 vc min0">
 <Thumb album={a} size={48} />
@@ -782,6 +888,21 @@ style={{ color: r?.score != null ? m.color : "var(--muted-2)" }}>
 </div>
 <div className="avg w58">{fmt(s.avg)}</div>
 </div>
+</div>
+{isOpen && (
+<div className="expanded lb">
+<div className="mb16"><ListenRow album={a} /></div>
+{s.visible.filter((r) => r.score !== null || r.review).length === 0 ? (
+<p className="muted">No verdicts were recorded for this one.</p>
+) : (
+members.map((mem) => {
+const r = s.visible.find((x) => x.memberId === mem.id);
+if (!r || (r.score === null && !r.review)) return null;
+return <Take key={mem.id} member={mem} r={r} />;
+})
+)}
+</div>
+)}
 </div>
 );
 })}
@@ -1080,7 +1201,7 @@ typeof window !== "undefined" && new URLSearchParams(window.location.search).has
 );
 const [cursor, setCursor] = useState(thisMonth());
 const [openAlbum, setOpenAlbum] = useState<string | null>(null);
-const [modal, setModal] = useState<{ open: boolean; album: Album | null }>({ open: false, album: null });
+const [adding, setAdding] = useState(false);
 
 const load = useCallback(async () => {
 const res = await api("/api/state");
@@ -1103,6 +1224,12 @@ const monthAlbums = useMemo(
 const shown = useMemo(
 () => monthAlbums.find((a) => a.id === openAlbum) ?? monthAlbums[0] ?? null,
 [monthAlbums, openAlbum],
+);
+
+/* The nudge follows the current month, not wherever the cursor is parked, so
+   it can flag an unmade pick from any tab. */
+const owesPick = Boolean(
+state?.me && !state.albums.some((a) => a.month === state.currentMonth && a.chosenBy === state.me),
 );
 
 const scoredByMe = useMemo(() => {
@@ -1142,7 +1269,12 @@ return (
 <nav className="tabs" role="tablist">
 {([["month", "This month"], ["upcoming", "Upcoming"], ["archive", "Archive"], ["table", "Leaderboard"], ["club", "Club"], ["admin", "Admin"]] as [Tab, string][]).map(
 ([id, text]) => (
-<button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{text}</button>
+<button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+{text}
+{id === "month" && owesPick && (
+<i className="tab-dot" title="You haven't picked for this month" />
+)}
+</button>
 ),
 )}
 </nav>
@@ -1183,6 +1315,12 @@ Redeploy and the club sets itself up on the next load.
 </div>
 </div>
 
+{owesPick && cursor === state.currentMonth && state.me && (
+<PickPrompt month={state.currentMonth} members={state.members} me={state.me}
+monthAlbums={monthAlbums} shortlist={state.myShortlist ?? []}
+onAdd={() => setAdding(true)} onBrowse={() => setTab("upcoming")} onPicked={load} />
+)}
+
 <div className="month-meta">
 <span className="eyebrow">{monthAlbums.length} {monthAlbums.length === 1 ? "album" : "albums"}</span>
 {monthAlbums.length > 0 && (
@@ -1193,17 +1331,19 @@ Redeploy and the club sets itself up on the next load.
 <span className="eyebrow">you&rsquo;ve done {scoredByMe} of {monthAlbums.length}</span>
 </>
 )}
-<button className="btn sm right" onClick={() => setModal({ open: true, album: null })}><Plus /> Add album</button>
+<button className="btn sm right" onClick={() => setAdding(true)}><Plus /> Add album</button>
 </div>
 
 {monthAlbums.length === 0 ? (
+owesPick && cursor === state.currentMonth ? null : (
 <div className="empty">
 <div className="display">Nothing picked for {label.name} yet</div>
 <p className="mb22">Everyone puts one album in and you&rsquo;ve got the month to get through them.</p>
-<button className="btn primary" onClick={() => setModal({ open: true, album: null })}>
+<button className="btn primary" onClick={() => setAdding(true)}>
 <Plus /> Add the first one
 </button>
 </div>
+)
 ) : (
 <>
 {monthAlbums.length > 1 && (
@@ -1211,13 +1351,18 @@ Redeploy and the club sets itself up on the next load.
 {monthAlbums.map((a) => {
 const mine = state.ratings.find((r) => r.albumId === a.id && r.memberId === state.me);
 const done = Boolean(mine && (mine.score !== null || mine.skipped));
+const by = state.members.find((m) => m.id === a.chosenBy);
 return (
 <button key={a.id} className="album-tab" role="tab" aria-selected={shown?.id === a.id}
-style={accentVars(state.members.find((m) => m.id === a.chosenBy)?.color)}
+style={accentVars(by?.color)}
 onClick={() => setOpenAlbum(a.id)}>
-<span className={`album-tab-dot${done ? " done" : ""}`} aria-hidden="true" />
+<span className={`album-tab-dot${done ? " done" : ""}`}
+title={done ? "You've scored this" : "You haven't scored this yet"} />
 <Thumb album={a} size={34} />
 <span className="album-tab-text">
+<span className="album-tab-who">
+{by ? `${by.name}${by.id === state.me ? " (you)" : ""}` : "Unclaimed"}
+</span>
 <span className="album-tab-title">{a.title}</span>
 <span className="album-tab-sub">{a.artist}</span>
 </span>
@@ -1228,7 +1373,7 @@ onClick={() => setOpenAlbum(a.id)}>
 )}
 {shown && (
 <AlbumCard key={shown.id} album={shown} members={state.members} ratings={state.ratings}
-me={state.me} onChanged={load} onEdit={(al) => setModal({ open: true, album: al })} />
+me={state.me} onChanged={load} />
 )}
 </>
 )}
@@ -1253,9 +1398,9 @@ albums={state.albums} onChanged={load} />
 )}
 </main>
 
-{modal.open && (
-<AlbumModal album={modal.album} month={cursor} members={state.members} me={state.me}
-onClose={() => setModal({ open: false, album: null })} onSaved={load} />
+{adding && (
+<AlbumModal album={null} month={cursor} members={state.members} me={state.me}
+onClose={() => setAdding(false)} onSaved={load} />
 )}
 </div>
 );

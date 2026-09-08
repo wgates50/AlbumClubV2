@@ -27,6 +27,8 @@ const CSS = `
   --accent: #e0b25c;
   --accent-2: #f0d08a;
   --accent-soft: rgba(224, 178, 92, 0.13);
+  --accent-line: rgba(224, 178, 92, 0.34);
+  --warn: #e8804f;
   --spotify: #1ed760;
   --ytm: #ff4e45;
   --apple: #fa586a;
@@ -1162,8 +1164,8 @@ label.field > span {
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .lbl { display: block; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 500; margin-bottom: 7px; }
 .lede.sm { font-size: 13px; margin: 0 0 22px; }
-.row.static { cursor: default; }
-.row.static:hover { background: none; }
+/* Lines up under the sleeve, the way the archive's does. */
+.expanded.lb { padding-left: 50px; }
 .row-title.sm { font-size: 19px; }
 .mini-score { font-size: 12px; min-width: 26px; text-align: right; }
 .stat-name { font-size: 14px; }
@@ -1335,16 +1337,67 @@ label.field > span {
   transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease); }
 .album-tab:hover { color: var(--text); border-color: var(--muted-2); }
 .album-tab[aria-selected="true"] { color: var(--text); background: var(--accent-soft);
-  border-color: rgba(224, 178, 92, 0.34); border-left-color: var(--accent); }
+  border-color: var(--accent-line); border-left-color: var(--accent); }
 /* Hollow until you have scored or skipped it, so "not done" is a visible state
    rather than an absent one. */
 .album-tab-dot { width: 7px; height: 7px; border-radius: 50%; flex: none;
   border: 1px solid var(--muted-2); box-sizing: border-box; }
 .album-tab-dot.done { background: var(--accent); border-color: var(--accent); }
 .album-tab-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.album-tab-who { font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500;
+  color: var(--accent); margin-bottom: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-tab-title { font-family: var(--font-display); font-size: 17px; line-height: 1.2; color: inherit;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-tab-sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- whose pick this is ---- */
+.album-chooser { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 12px;
+  font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500;
+  color: var(--accent); border: 1px solid var(--accent-line); background: var(--accent-soft);
+  border-radius: 100px; padding: 4px 12px 4px 10px; }
+.album-chooser .dim { color: var(--muted); letter-spacing: inherit; }
+
+/* ---- nudging a blank pick ---- */
+.tab-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--warn); margin-left: 7px; vertical-align: 1px; animation: nudge-pulse 2.4s var(--ease) infinite; }
+@keyframes nudge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .tab-dot { animation: none; } }
+
+.nudge { display: flex; margin: 22px 0 8px; border: 1px solid var(--accent);
+  border-radius: var(--radius); overflow: hidden; background: var(--surface);
+  animation: rise 0.5s var(--ease) both; }
+.nudge-bar { width: 4px; flex: none; background: var(--accent); }
+.nudge-body { flex: 1; min-width: 0; padding: 20px 22px 22px;
+  background: linear-gradient(100deg, var(--accent-soft), transparent 62%); }
+.nudge-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 7px; }
+.nudge-title { font-size: clamp(25px, 3.6vw, 34px); line-height: 1.1; margin: 0; color: var(--text); }
+.nudge-days { flex: none; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  font-weight: 600; color: var(--accent); border: 1px solid var(--accent-line);
+  border-radius: 100px; padding: 3px 10px; white-space: nowrap; }
+.nudge-line { margin: 0 0 18px; max-width: 56ch; font-size: 14.5px; color: var(--text-dim); }
+
+/* Last few days: the whole panel changes colour rather than shouting louder. */
+.nudge.urgent { border-color: var(--warn); }
+.nudge.urgent .nudge-bar { background: var(--warn); }
+.nudge.urgent .nudge-body { background: linear-gradient(100deg, rgba(232, 128, 79, 0.1), transparent 62%); }
+.nudge.urgent .nudge-days { color: var(--warn); border-color: var(--warn); }
+
+.nudge-picks { display: flex; flex-direction: column; gap: 6px; }
+.nudge-pick { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 14px 8px 8px; color: var(--text); font-family: var(--font-ui); font-weight: 300;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease); }
+.nudge-pick:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+.nudge-pick:disabled { opacity: 0.5; cursor: default; }
+.nudge-pick-art { width: 40px; height: 40px; flex: none; border-radius: 2px; overflow: hidden;
+  background: var(--surface-2); }
+.nudge-pick-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.nudge-pick-title { display: block; font-family: var(--font-display); font-size: 17px; line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nudge-pick-sub { display: block; font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nudge-pick-go { margin-left: auto; flex: none; font-size: 10.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; font-weight: 500; color: var(--accent); }
 
 /* ---- admin ---- */
 .adm-list { display: flex; flex-direction: column; margin-top: 6px; }
@@ -1376,9 +1429,9 @@ label.field > span {
 .adm-score { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; padding: 3px 9px 3px 7px;
   border-radius: 999px; color: var(--text-dim); background: var(--surface-2); font-variant-numeric: tabular-nums; }
 .adm-score.skip { color: var(--muted); }
-.adm-score.zero { color: #e8804f; background: rgba(232, 128, 79, 0.12); }
+.adm-score.zero { color: var(--warn); background: rgba(232, 128, 79, 0.12); }
 .adm-flag { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
-  font-size: 11px; color: #e8804f; box-shadow: inset 0 0 0 1px #e8804f; }
+  font-size: 11px; color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
 
 .adm-edit { padding: 2px 12px 18px; }
 .adm-edit .admin-row:first-child { border-top: 1px solid var(--line-soft); }
@@ -1413,6 +1466,8 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .adm-art { grid-row: span 2; align-self: start; }
   .adm-scores { grid-column: 2 / -1; }
   .adm-edit { padding: 2px 8px 18px; }
+  .nudge-body { padding: 16px 16px 18px; }
+  .expanded.lb { padding-left: 0; }
 }
 `;
 

@@ -513,6 +513,8 @@ ok: true, mode: hasDb ? "live" : "preview", me: session.memberId,
 members: await listMembers(), albums, ratings,
 clubName: settings.club_name || "Album Club",
 currentMonth: currentMonth(),
+/* The nudge to pick offers this member's own shortlist as one-click picks. */
+myShortlist: session.memberId ? await listShortlist(session.memberId) : [],
 });
 } catch (err) {
 return J({
