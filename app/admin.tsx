@@ -9,6 +9,7 @@ type Album = {
   id: string; month: string; title: string; artist: string; year: number | null;
   chosenBy: string | null; artUrl: string | null; spotifyUrl: string | null;
   ytmUrl: string | null; appleUrl: string | null; tracks: string[]; createdAt: string;
+  releaseDate: string | null;
 };
 type Rating = {
   albumId: string; memberId: string; score: number | null; review: string;
@@ -261,9 +262,9 @@ export default function Admin({ albums, members, ratings, onChanged }: Props) {
                         onBlur={(e) => { if (e.target.value.trim() && e.target.value !== a.artist) void saveAlbum(a, { artist: e.target.value.trim() }); }} />
                     </label>
                     <label className="field">
-                      <span>Year</span>
-                      <input type="number" defaultValue={a.year ?? ""} placeholder="—"
-                        onBlur={(e) => void saveAlbum(a, { year: e.target.value ? Number(e.target.value) : null })} />
+                      <span>Release date</span>
+                      <input type="date" defaultValue={a.releaseDate ?? ""}
+                        onBlur={(e) => { if ((e.target.value || null) !== a.releaseDate) void saveAlbum(a, { releaseDate: e.target.value || null }); }} />
                     </label>
                   </div>
                   <div className="grid3">

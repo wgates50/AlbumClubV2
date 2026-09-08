@@ -12,6 +12,7 @@ type Album = {
 id: string; month: string; title: string; artist: string; year: number | null;
 chosenBy: string | null; artUrl: string | null; spotifyUrl: string | null;
 ytmUrl: string | null; appleUrl: string | null; tracks: string[]; createdAt: string;
+releaseDate: string | null;
 };
 type Rating = {
 albumId: string; memberId: string; score: number | null; review: string;
@@ -69,6 +70,9 @@ await p.query(`alter table music_accounts add column if not exists refreshed_at 
 /* "Skipped" is a third state, distinct from an unscored album nobody has got
    to yet — it says the listener made a decision, so stop nagging them. */
 await p.query(`alter table ratings add column if not exists skipped boolean not null default false`);
+/* So the club can tell an album that is out from one that only will be. ISO,
+   either a full day or a bare month when that is all anyone knows. */
+await p.query(`alter table albums add column if not exists release_date text`);
 }
 
 function parseList(raw: unknown): string[] {
@@ -91,17 +95,17 @@ const P_ALB: Album[] = [
 artUrl: art("Music116/v4/9d/0f/1c/9d0f1c2b-2fae-d8ac-3920-ce9ec5bc85b5/7982.jpg"),
 spotifyUrl: null, ytmUrl: null, appleUrl: "https://music.apple.com/gb/album/untrue/1056902908",
 tracks: ["Archangel", "Near Dark", "Ghost Hardware", "Etched Headplate", "In McDonalds", "Untrue", "Shell of Light", "Dog Shelter", "Homeless", "UK", "Raver"],
-createdAt: "2026-01-01T00:00:00.000Z" },
+createdAt: "2026-01-01T00:00:00.000Z", releaseDate: "2007-11-05" },
 { id: "p2", month: nowMonth(), title: "Promises", artist: "Floating Points, Pharoah Sanders & the LSO", year: 2021, chosenBy: "oli",
 artUrl: art("Music126/v4/af/dc/6b/afdc6b88-b275-de4e-3098-63dff171dffb/680899009720.jpg"),
 spotifyUrl: null, ytmUrl: null, appleUrl: "https://music.apple.com/gb/album/promises/1550697816",
 tracks: ["Movement 1", "Movement 2", "Movement 3", "Movement 4", "Movement 5", "Movement 6", "Movement 7", "Movement 8", "Movement 9"],
-createdAt: "2026-01-01T00:00:01.000Z" },
+createdAt: "2026-01-01T00:00:01.000Z", releaseDate: "2021-03-26" },
 { id: "p3", month: nowMonth(), title: "Honey", artist: "Caribou", year: 2024, chosenBy: "flik",
 artUrl: art("Music211/v4/84/03/99/84039972-0b74-d18d-f268-23ce3e1d9cf2/57426.jpg"),
 spotifyUrl: null, ytmUrl: null, appleUrl: "https://music.apple.com/gb/album/honey/1839200694",
 tracks: ["Broke My Heart", "Volume", "Honey", "Campfire", "Come Find Me", "Climbing", "Got To Change", "Over Now"],
-createdAt: "2026-01-01T00:00:02.000Z" },
+createdAt: "2026-01-01T00:00:02.000Z", releaseDate: "2024-10-04" },
 ];
 const P_RAT: Rating[] = [
 { albumId: "p1", memberId: "oli", skipped: false, score: 9.1, review: "Still sounds like it was recorded through a night bus window. Nothing else gets this much feeling out of so little.", favTracks: ["Archangel", "Shell of Light"], updatedAt: "2026-01-02T00:00:00.000Z" },
@@ -147,12 +151,13 @@ await db().query(`delete from members where id=$1`, [id]);
 async function listAlbums(): Promise<Album[]> {
 if (!hasDb) return [...pv.albums].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 await ready();
-const r = await db().query(`select id,month,title,artist,year,chosen_by,art_url,spotify_url,ytm_url,apple_url,tracks,created_at from albums order by month desc, created_at asc`);
+const r = await db().query(`select id,month,title,artist,year,chosen_by,art_url,spotify_url,ytm_url,apple_url,tracks,created_at,release_date from albums order by month desc, created_at asc`);
 return r.rows.map((x) => ({
 id: x.id, month: x.month, title: x.title, artist: x.artist,
 year: x.year === null ? null : Number(x.year), chosenBy: x.chosen_by,
 artUrl: x.art_url, spotifyUrl: x.spotify_url, ytmUrl: x.ytm_url, appleUrl: x.apple_url,
 tracks: parseList(x.tracks), createdAt: new Date(x.created_at).toISOString(),
+releaseDate: x.release_date ?? null,
 }));
 }
 async function saveAlbum(a: Album): Promise<void> {
@@ -162,8 +167,8 @@ if (i >= 0) pv.albums[i] = a; else pv.albums.push(a);
 return;
 }
 await ready();
-await db().query(`insert into albums (id,month,title,artist,year,chosen_by,art_url,spotify_url,ytm_url,apple_url,tracks) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (id) do update set month=excluded.month,title=excluded.title,artist=excluded.artist,year=excluded.year,chosen_by=excluded.chosen_by,art_url=excluded.art_url,spotify_url=excluded.spotify_url,ytm_url=excluded.ytm_url,apple_url=excluded.apple_url,tracks=excluded.tracks`,
-[a.id, a.month, a.title, a.artist, a.year, a.chosenBy, a.artUrl, a.spotifyUrl, a.ytmUrl, a.appleUrl, JSON.stringify(a.tracks ?? [])]);
+await db().query(`insert into albums (id,month,title,artist,year,chosen_by,art_url,spotify_url,ytm_url,apple_url,tracks,release_date) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (id) do update set month=excluded.month,title=excluded.title,artist=excluded.artist,year=excluded.year,chosen_by=excluded.chosen_by,art_url=excluded.art_url,spotify_url=excluded.spotify_url,ytm_url=excluded.ytm_url,apple_url=excluded.apple_url,tracks=excluded.tracks,release_date=excluded.release_date`,
+[a.id, a.month, a.title, a.artist, a.year, a.chosenBy, a.artUrl, a.spotifyUrl, a.ytmUrl, a.appleUrl, JSON.stringify(a.tracks ?? []), a.releaseDate]);
 }
 async function deleteAlbum(id: string): Promise<void> {
 if (!hasDb) {
@@ -569,6 +574,22 @@ const J = (d: unknown, s = 200) => NextResponse.json(d, { status: s });
 const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const RELEASE_RE = /^\d{4}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$/;
+
+/* A record can be picked for the month it lands in even if that is a fortnight
+   away — everyone still has the rest of the month to hear it. One that does not
+   arrive until after the month is over cannot be scored by anybody, so it is
+   turned away. Anything already out is fine, however old it is. */
+function releaseTooLate(releaseDate: string | null, month: string): boolean {
+if (!releaseDate || !RELEASE_RE.test(releaseDate)) return false;
+return releaseDate.slice(0, 7) > month;
+}
+const releaseLabel = (d: string) =>
+new Date(`${d.length === 7 ? `${d}-01` : d}T00:00:00Z`).toLocaleDateString("en-GB", {
+day: d.length === 7 ? undefined : "numeric", month: "long", year: "numeric", timeZone: "UTC",
+});
+const monthName = (m: string) =>
+new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
 const str = (v: unknown): string | null => {
 const s = v === null || v === undefined ? "" : String(v).trim();
 return s ? s : null;
@@ -653,6 +674,7 @@ sourceId: String(a.collectionId),
 title: String(a.collectionName ?? ""),
 artist: String(a.artistName ?? ""),
 year: a.releaseDate ? new Date(String(a.releaseDate)).getUTCFullYear() : null,
+releaseDate: a.releaseDate ? String(a.releaseDate).slice(0, 10) : null,
 artUrl: a.artworkUrl100
 ? String(a.artworkUrl100).replace(/\/\d+x\d+bb\.(jpg|png)$/, "/600x600bb.$1")
 : null,
@@ -894,11 +916,14 @@ if (!item) return bad("Not on your shortlist", 404);
 const month = str(b.month) ?? item.month;
 if (!MONTH_RE.test(month)) return bad("Bad month");
 const year = item.releaseDate ? Number(item.releaseDate.slice(0, 4)) : NaN;
+if (releaseTooLate(item.releaseDate, month))
+return bad(`${item.title} isn't out until ${releaseLabel(item.releaseDate!)}. It can be your pick for ${monthName(item.releaseDate!.slice(0, 7))}, but not ${monthName(month)}.`);
 const album: Album = {
 id: newId("alb"), month, title: item.title, artist: item.artist,
 year: Number.isFinite(year) && year > 1900 ? year : null,
 chosenBy: auth.memberId, artUrl: item.artUrl, spotifyUrl: item.spotifyUrl,
 ytmUrl: null, appleUrl: null, tracks: [], createdAt: new Date().toISOString(),
+releaseDate: item.releaseDate,
 };
 await saveAlbum(album);
 await deleteShortlist(auth.memberId, item.id);
@@ -925,9 +950,15 @@ if (!title || !artist) return bad("An album needs a title and an artist");
 const month = str(b.month) ?? currentMonth();
 if (!MONTH_RE.test(month)) return bad("Bad month");
 const y = Number(b.year);
+const releaseDate = str(b.releaseDate);
+const releaseYear = releaseDate && RELEASE_RE.test(releaseDate) ? Number(releaseDate.slice(0, 4)) : NaN;
+if (releaseDate && !RELEASE_RE.test(releaseDate)) return bad("Release date should look like 2026-09-18");
+if (releaseTooLate(releaseDate, month))
+return bad(`${title} isn't out until ${releaseLabel(releaseDate!)}, so nobody could score it in ${monthName(month)}. Put it in ${monthName(releaseDate!.slice(0, 7))} instead.`);
 const album: Album = {
 id: newId("alb"), month, title, artist,
-year: Number.isFinite(y) && y > 1900 ? Math.trunc(y) : null,
+year: Number.isFinite(y) && y > 1900 ? Math.trunc(y)
+: Number.isFinite(releaseYear) && releaseYear > 1900 ? releaseYear : null,
 chosenBy: str(b.chosenBy) ?? auth.memberId,
 artUrl: str(b.artUrl), spotifyUrl: str(b.spotifyUrl),
 ytmUrl: str(b.ytmUrl), appleUrl: str(b.appleUrl),
@@ -935,6 +966,7 @@ tracks: Array.isArray(b.tracks)
 ? (b.tracks as unknown[]).map(String).filter(Boolean).slice(0, 60)
 : [],
 createdAt: new Date().toISOString(),
+releaseDate,
 };
 await saveAlbum(album);
 return J({ ok: true, album });
@@ -1080,7 +1112,15 @@ appleUrl: b.appleUrl === undefined ? ex.appleUrl : str(b.appleUrl),
 tracks: Array.isArray(b.tracks)
 ? (b.tracks as unknown[]).map(String).filter(Boolean).slice(0, 60)
 : ex.tracks,
+releaseDate: b.releaseDate === undefined ? ex.releaseDate : str(b.releaseDate),
 };
+if (next.releaseDate && !RELEASE_RE.test(next.releaseDate))
+return bad("Release date should look like 2026-09-18");
+/* Catches both halves of the same mistake: dating an album past its month, and
+   moving an album back to a month it had not come out in. */
+if (releaseTooLate(next.releaseDate, next.month))
+return bad(`${next.title} isn't out until ${releaseLabel(next.releaseDate!)}, which is after ${monthName(next.month)}.`);
+if (next.year === null && next.releaseDate) next.year = Number(next.releaseDate.slice(0, 4));
 await saveAlbum(next);
 return J({ ok: true, album: next });
 }

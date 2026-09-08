@@ -1020,6 +1020,19 @@ label.field > span {
   background: rgba(224, 178, 92, 0.05);
 }
 
+/* A record that cannot make its month at all, as against one that is merely
+   still to come. */
+.notice.bad { border-color: var(--warn); background: rgba(232, 128, 79, 0.06); }
+.notice.bad .badge { border-color: var(--warn); color: var(--warn); }
+
+/* Pinned to the warning colour rather than --accent: this sits on an album
+   card, where the accent is whoever picked the record, and a caution wearing
+   the chooser's colour reads as decoration. */
+.notice.soon { border-color: var(--warn); background: rgba(232, 128, 79, 0.06); }
+.notice.soon .badge { border-color: var(--warn); color: var(--warn); }
+
+.chip.soon { border-color: var(--warn); color: var(--warn); }
+
 .notice .badge {
   font-size: 9.5px;
   letter-spacing: 0.15em;
@@ -1109,9 +1122,6 @@ label.field > span {
   .wall { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 14px; }
   .pick-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
   .album-glow { left: -16px; right: -16px; height: 300px; }
-  .admin-row { grid-template-columns: 1fr; }
-  .admin-row textarea { grid-column: 1; }
-  .admin-album { flex-direction: column; }
   .album-tab { max-width: 200px; }
 }
 
@@ -1213,7 +1223,7 @@ label.field > span {
 .up-note { margin: -6px 0 18px; }
 .up-empty { color: var(--muted); font-size: 14px; padding: 40px 0; max-width: 460px; line-height: 1.6; }
 
-.up-filters { display: flex; gap: 6px; margin-bottom: 20px; }
+.up-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
 .up-filter { background: none; border: 1px solid var(--line); cursor: pointer; color: var(--muted); font-family: var(--font-ui); font-size: 12px; padding: 6px 13px; border-radius: 999px; transition: all 0.18s var(--ease); }
 .up-filter:hover { color: var(--text-dim); border-color: var(--muted-2); }
 .up-filter[aria-selected="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); }
@@ -1479,7 +1489,8 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .up-actions { min-width: 0; align-items: center; }
   .up-row { flex-wrap: wrap; }
   .up-row-actions { width: 100%; padding-left: 68px; }
-  .up-artists { grid-template-columns: 1fr; }
+  .up-artists { grid-template-columns: minmax(0, 1fr); }
+  .up-artist-row { min-width: 0; }
   .adm-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 8px; }
   .adm-art { grid-row: span 2; align-self: start; }
   .adm-scores { grid-column: 2 / -1; }
@@ -1488,6 +1499,16 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .up-checked { margin-left: 0; width: 100%; }
   .nudge-body { padding: 16px 16px 18px; }
   .expanded.lb { padding-left: 0; }
+}
+
+/* Declared here rather than with the rest of the 560px rules: that block comes
+   earlier in the sheet than the admin section, so at equal specificity it lost
+   on source order and never took effect. */
+@media (max-width: 560px) {
+  .admin-row { grid-template-columns: minmax(0, 1fr); }
+  .admin-row textarea { grid-column: 1; }
+  .admin-fields { flex-wrap: wrap; }
+  .admin-album { flex-direction: column; }
 }
 `;
 

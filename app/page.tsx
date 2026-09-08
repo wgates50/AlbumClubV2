@@ -14,6 +14,7 @@ type Album = {
 id: string; month: string; title: string; artist: string; year: number | null;
 chosenBy: string | null; artUrl: string | null; spotifyUrl: string | null;
 ytmUrl: string | null; appleUrl: string | null; tracks: string[]; createdAt: string;
+releaseDate: string | null;
 };
 type Rating = {
 albumId: string; memberId: string; score: number | null; review: string;
@@ -54,6 +55,21 @@ const [y, mm] = month.split("-").map(Number);
 const last = new Date(y, mm, 0).getDate();
 return Math.max(0, last - new Date().getDate());
 };
+const RELEASE_RE = /^\d{4}-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?$/;
+const releaseLabel = (d: string) =>
+new Date(`${d.length === 7 ? `${d}-01` : d}T00:00:00Z`).toLocaleDateString("en-GB", {
+day: d.length === 7 ? undefined : "numeric", month: "long", year: "numeric", timeZone: "UTC",
+});
+/* Out later today still counts as out, so this compares whole days. */
+function notOutYet(d: string | null | undefined): boolean {
+if (!d || !RELEASE_RE.test(d)) return false;
+const today = new Date().toISOString().slice(0, 10);
+return (d.length === 7 ? `${d}-01` : d) > today;
+}
+/* The same rule the server enforces, so the form can say so before you submit. */
+const releaseTooLate = (d: string | null | undefined, month: string) =>
+Boolean(d && RELEASE_RE.test(d) && d.slice(0, 7) > month);
+
 const q = (a: Album) => `${a.artist} ${a.title}`.trim();
 const spotify = (a: Album) => a.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(q(a))}/albums`;
 const ytm = (a: Album) => a.ytmUrl || `https://music.youtube.com/search?q=${encodeURIComponent(q(a))}`;
@@ -273,7 +289,11 @@ return (
 <p className="album-artist">{album.artist}</p>
 <h2 className="album-title display">{album.title}</h2>
 <div className="album-sub">
-{album.year && <span className="mono-num">{album.year}</span>}
+{album.releaseDate
+? <span className={`chip${notOutYet(album.releaseDate) ? " soon" : ""}`}>
+{notOutYet(album.releaseDate) ? "Out " : "Released "}{releaseLabel(album.releaseDate)}
+</span>
+: album.year && <span className="mono-num">{album.year}</span>}
 <span className="chip">{stats.scoredCount}/{stats.total} scored</span>
 {stats.avg !== null && stats.scoredCount > 1 && (
 <span className="chip gold">
@@ -281,6 +301,15 @@ return (
 </span>
 )}
 </div>
+{notOutYet(album.releaseDate) && (
+<div className="notice soon mb16">
+<span className="badge">Not out yet</span>
+<div>
+This lands on <strong className="semi">{releaseLabel(album.releaseDate!)}</strong>. Scores and
+reviews can wait until then — the links below will not play anything before it.
+</div>
+</div>
+)}
 <ListenRow album={album} />
 </div>
 </div>
@@ -474,6 +503,7 @@ style={c.artUrl ? undefined : { background: fallbackArt(c.artist + c.title) }}>
 type Result = {
 sourceId: string; title: string; artist: string; year: number | null;
 artUrl: string | null; appleUrl: string | null; trackCount: number | null;
+releaseDate: string | null;
 };
 
 function AlbumModal({
@@ -494,6 +524,7 @@ year: album?.year ? String(album.year) : "", artUrl: album?.artUrl ?? "",
 appleUrl: album?.appleUrl ?? "", spotifyUrl: album?.spotifyUrl ?? "",
 ytmUrl: album?.ytmUrl ?? "", month: album?.month ?? month,
 chosenBy: album?.chosenBy ?? me ?? "", tracks: album?.tracks ?? ([] as string[]),
+releaseDate: album?.releaseDate ?? "",
 });
 const set = (p: Partial<typeof form>) => setForm((f) => ({ ...f, ...p }));
 const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -520,6 +551,7 @@ async function choose(r: Result) {
 set({
 title: r.title, artist: r.artist, year: r.year ? String(r.year) : "",
 artUrl: r.artUrl ?? "", appleUrl: r.appleUrl ?? "",
+releaseDate: r.releaseDate ?? "",
 });
 setQuery("");
 setResults([]);
@@ -530,16 +562,25 @@ if (tracks.length) set({ tracks });
 
 async function save() {
 if (!form.title.trim() || !form.artist.trim()) { setError("An album needs a title and an artist."); return; }
+if (form.releaseDate && !RELEASE_RE.test(form.releaseDate)) {
+setError("Release date should look like 2026-09-18, or 2026-09 if the day isn't known.");
+return;
+}
+if (tooLate) {
+setError(`${form.title || "That album"} isn't out until ${releaseLabel(form.releaseDate)}, so nobody could score it in ${monthLabel(form.month).name}. Pick ${monthLabel(form.releaseDate.slice(0, 7)).name} as the month instead.`);
+return;
+}
 setBusy(true); setError("");
 const res = await api("/api/albums", {
 method: editing ? "PATCH" : "POST",
 body: JSON.stringify({
 ...(editing ? { id: album!.id } : {}),
 title: form.title, artist: form.artist,
-year: form.year ? Number(form.year) : null,
+year: form.releaseDate ? Number(form.releaseDate.slice(0, 4)) : form.year ? Number(form.year) : null,
 artUrl: form.artUrl || null, appleUrl: form.appleUrl || null,
 spotifyUrl: form.spotifyUrl || null, ytmUrl: form.ytmUrl || null,
 month: form.month, chosenBy: form.chosenBy || null, tracks: form.tracks,
+releaseDate: form.releaseDate || null,
 }),
 });
 setBusy(false);
@@ -558,6 +599,8 @@ if (res.ok) { onSaved(); onClose(); }
 
 const months = [shiftMonth(thisMonth(), 1), thisMonth(), shiftMonth(thisMonth(), -1), shiftMonth(thisMonth(), -2), shiftMonth(thisMonth(), -3)];
 if (!months.includes(form.month)) months.push(form.month);
+const tooLate = releaseTooLate(form.releaseDate, form.month);
+const dueLater = !tooLate && notOutYet(form.releaseDate);
 
 return (
 <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -614,11 +657,12 @@ onChange={(e) => setQuery(e.target.value)} />
 
 <div className="grid3">
 <label className="field">
-<span>Year</span>
-<input type="number" value={form.year} placeholder="2024" onChange={(e) => set({ year: e.target.value })} />
+<span>Release date</span>
+<input type="date" value={form.releaseDate.length === 7 ? `${form.releaseDate}-01` : form.releaseDate}
+onChange={(e) => set({ releaseDate: e.target.value })} />
 </label>
 <label className="field">
-<span>Month</span>
+<span>Club month</span>
 <select value={form.month} onChange={(e) => set({ month: e.target.value })}>
 {months.map((m) => {
 const l = monthLabel(m);
@@ -634,6 +678,19 @@ return <option key={m} value={m}>{l.name} {l.year}</option>;
 </select>
 </label>
 </div>
+
+{(tooLate || dueLater) && (
+<div className={`notice ${tooLate ? "bad" : "warn"} mb16`}>
+<span className="badge">{tooLate ? "Too late" : "Not out yet"}</span>
+<div>
+{tooLate
+? <>Out {releaseLabel(form.releaseDate)}, which is after {monthLabel(form.month).name} finishes.
+Nobody could score it in time — put it in {monthLabel(form.releaseDate.slice(0, 7)).name} instead.</>
+: <>Out {releaseLabel(form.releaseDate)}. Fine for {monthLabel(form.month).name} — everyone just
+has less of the month to get through it.</>}
+</div>
+</div>
+)}
 
 <details className="more">
 <summary>Artwork &amp; links</summary>
