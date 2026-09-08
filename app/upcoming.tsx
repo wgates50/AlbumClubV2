@@ -147,6 +147,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   const [releases, setReleases] = useState<Release[]>([]);
   const [view, setView] = useState<View>("releases");
   const [resetting, setResetting] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [dropShortlist, setDropShortlist] = useState(false);
   const [filter, setFilter] = useState<Filter>("upcoming");
   const [busy, setBusy] = useState("");
@@ -219,7 +220,10 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
       setReleases(all);
       setNote(extra.length ? `${extra.length} more found via MusicBrainz` : "");
 
-      /* Banked, so the next visit opens on this instead of running it again. */
+      /* Banked, so the next visit opens on this instead of running it again —
+         unless this scan has since been abandoned, in which case writing now
+         would undo whatever abandoned it. */
+      if (controller.signal.aborted) return;
       const saved = await call("/api/upcoming", {
         method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ releases: all.map(dehydrate) }),
@@ -423,7 +427,13 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   /* Wipes the connection, the artists on file and any muting, so the next visit
      starts at the connect screen with nothing carried over. */
   const startOver = useCallback(async (alsoShortlist: boolean) => {
-    setBusy("Clearing…");
+    /* A scan may well be running — that is when you are most likely to give up
+       on it. Stop it first, or it would finish and write its results back over
+       the rows this is about to delete. */
+    abort.current?.abort();
+    setClearing(true);
+    setBusy("");
+    setError("");
     await call(`/api/upcoming${alsoShortlist ? "?shortlist=1" : ""}`, { method: "DELETE" });
     setReleases([]);
     setSearch("");
@@ -432,7 +442,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     setDropShortlist(false);
     refreshed.current = false;
     await load();
-    setBusy("");
+    setClearing(false);
   }, [load]);
 
   if (!wire) return <p className="up-empty">Loading…</p>;
@@ -523,9 +533,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
               Skip — just my artists
             </button>
           )}
-          {wire.artists.length > 0 && (
-            <button className="btn ghost" onClick={() => setPlaylists(null)}>Cancel</button>
-          )}
+          <button className="btn ghost" onClick={() => setPlaylists(null)}>Cancel</button>
         </div>
       </div>
     );
@@ -721,11 +729,11 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
               </label>
             )}
             <div className="flex gap8 wrap">
-              <button className="btn sm danger" disabled={Boolean(busy)}
+              <button className="btn sm danger" disabled={clearing}
                 onClick={() => startOver(dropShortlist)}>
-                {busy ? "Clearing…" : "Yes, clear it"}
+                {clearing ? "Clearing…" : "Yes, clear it"}
               </button>
-              <button className="btn sm ghost" disabled={Boolean(busy)}
+              <button className="btn sm ghost"
                 onClick={() => { setResetting(false); setDropShortlist(false); }}>
                 Cancel
               </button>
