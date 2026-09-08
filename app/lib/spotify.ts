@@ -254,11 +254,21 @@ export async function fetchPlaylists(): Promise<Playlist[]> {
   return liked ? [liked, ...out] : out;
 }
 
+export type ArtistScan = {
+  artists: SpotifyArtist[];
+  /* Short of `total` means Spotify would not finish the job this sitting. What
+     came back is still real, just not the whole library. */
+  named: number;
+  total: number;
+  complete: boolean;
+};
+
 export async function fetchArtistsFromPlaylists(
   playlistIds: string[],
   onProgress?: (m: string) => void,
   signal?: AbortSignal,
-): Promise<SpotifyArtist[]> {
+  known: Map<string, SpotifyArtist> = new Map(),
+): Promise<ArtistScan> {
   const token = await serverToken();
   const ids = new Set<string>();
 
@@ -281,17 +291,25 @@ export async function fetchArtistsFromPlaylists(
     if (i < playlistIds.length - 1) await sleep(100);
   }
 
-  /* Names and pictures come back 50 at a time. Saving replaces the stored
-     library wholesale, so a batch that cannot be read is not something to skip
-     past — half a library saved over a whole one is worse than no save. Each
-     batch is retried with a widening gap, and a batch that will not come back
-     fails the whole pass so nothing is overwritten. */
+  /* Names and pictures come back 50 at a time, which for a big library is a lot
+     of asking. Anyone already on file is reused rather than looked up again, so
+     a second run starts where the first ran out of patience. Whatever does get
+     named is handed back even if the rest will not come — an incomplete answer
+     is saved additively, so running again only ever adds. */
   const all = Array.from(ids);
   const artists: SpotifyArtist[] = [];
+  const toName: string[] = [];
+  for (const id of all) {
+    const seen = known.get(id);
+    if (seen) artists.push(seen); else toName.push(id);
+  }
+
   let pause = 300;
-  for (let i = 0; i < all.length; i += 50) {
-    onProgress?.(`Naming artists… ${Math.min(i + 50, all.length)}/${all.length}`);
-    const batch = all.slice(i, i + 50).join(",");
+  let complete = true;
+  outer:
+  for (let i = 0; i < toName.length; i += 50) {
+    onProgress?.(`Naming artists… ${Math.min(i + 50, toName.length)} of ${toName.length}`);
+    const batch = toName.slice(i, i + 50).join(",");
     for (let attempt = 0; ; attempt++) {
       try {
         const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`, { signal });
@@ -300,20 +318,20 @@ export async function fetchArtistsFromPlaylists(
         break;
       } catch (err) {
         if ((err as Error)?.name === "AbortError") throw err;
-        if (attempt >= 4) {
-          throw new Error(
-            `Spotify stopped answering after naming ${artists.length} of ${all.length} artists. ` +
-            `Your artist list has been left as it was — try again in a few minutes.`,
-          );
-        }
-        const wait = err instanceof RateLimited ? Math.min(err.retryAfter, 30) : 3;
+        if (attempt >= 5) { complete = false; break outer; }
+        /* Spotify's own number, waited out in full up to a minute — the earlier
+           cap of 30s meant we gave up while it was still telling us when to
+           come back. Progress says what is happening so it does not read as
+           a freeze. */
+        const wait = err instanceof RateLimited ? Math.min(err.retryAfter, 60) : 3;
+        onProgress?.(`Spotify asked us to wait ${wait}s — ${artists.length} named so far…`);
         await sleep(wait * 1000, signal);
         pause = Math.min(pause * 2, 3000);
       }
     }
-    if (i + 50 < all.length) await sleep(pause, signal);
+    if (i + 50 < toName.length) await sleep(pause, signal);
   }
-  return artists;
+  return { artists, named: artists.length, total: all.length, complete };
 }
 
 function parseDate(dateStr: string, precision: string): Date | null {

@@ -153,6 +153,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [libraryNote, setLibraryNote] = useState("");
   const [playlists, setPlaylists] = useState<Playlist[] | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -316,7 +317,9 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     return () => { cancelled = true; abort.current?.abort(); };
   }, [load, refreshReleases, openPicker]);
 
-  const saveArtists = useCallback(async (artists: SpotifyArtist[], service: Service, playlistIds: string[]) => {
+  const saveArtists = useCallback(async (
+    artists: SpotifyArtist[], service: Service, playlistIds: string[], merge = false,
+  ) => {
     if (!artists.length) {
       setError(service === "spotify"
         ? "Spotify returned no artists — follow a few, then try again."
@@ -327,7 +330,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     setBusy(`Saving ${artists.length} artists…`);
     const saved = await call("/api/upcoming", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ artists, playlistIds }),
+      body: JSON.stringify({ artists, playlistIds, merge }),
     });
     if (!saved.ok) throw new Error(String(saved.data.error ?? "Couldn't save your artists"));
     const w = await load();
@@ -345,18 +348,31 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
     setPlaylists(null);
     try {
       let artists: SpotifyArtist[];
+      let partial = false;
       if (service === "youtube") {
         setBusy("Reading those playlists…");
         artists = await youtubeArtistsFromPlaylists(ids, (m) => setBusy(m));
       } else {
         setBusy("Reading your Spotify library…");
         const followed = await fetchFollowedArtists((m) => setBusy(m));
-        const fromLists = ids.length ? await spotifyArtistsFromPlaylists(ids, (m) => setBusy(m)) : [];
+        /* Everyone already on file keeps their name without asking Spotify
+           again, which is most of the work on a second run. */
+        const known = new Map((wire?.artists ?? []).map((a) => [a.id,
+          { id: a.id, name: a.name, imageUrl: a.imageUrl, source: a.source }]));
+        const scan = ids.length
+          ? await spotifyArtistsFromPlaylists(ids, (m) => setBusy(m), undefined, known)
+          : { artists: [], named: 0, total: 0, complete: true };
         const merged = new Map(followed.map((a) => [a.id, a]));
-        for (const a of fromLists) if (!merged.has(a.id)) merged.set(a.id, a);
+        for (const a of scan.artists) if (!merged.has(a.id)) merged.set(a.id, a);
         artists = Array.from(merged.values());
+        partial = !scan.complete;
+        setLibraryNote(partial
+          ? `Spotify would only name ${scan.named} of ${scan.total} artists this time — it limits how fast `
+            + `anyone can ask. Those ${scan.named} are saved and nothing was lost. Give it a few minutes and `
+            + `hit "Update my artists" again: it skips everyone already named and carries on from there.`
+          : "");
       }
-      await saveArtists(artists, service, ids);
+      await saveArtists(artists, service, ids, partial);
     } catch (err) {
       setError(humanError(err, "Couldn't read those playlists"));
       setBusy("");
@@ -598,6 +614,7 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
         </div>
       </div>
 
+      {libraryNote && <p className="notice warn up-library-note"><span className="badge">Part way</span><span>{libraryNote}</span></p>}
       {busy && <div className="up-busy"><span className="up-bar" />{busy}</div>}
       {error && <p className="error">{error}</p>}
       {!busy && note && <p className="muted up-note">{note}</p>}

@@ -1271,6 +1271,7 @@ label.field > span {
 .up-stats { display: flex; gap: 22px; margin-bottom: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
 .up-stats b { color: var(--text); font-family: var(--font-display); font-size: 17px; margin-right: 5px; font-weight: 400; }
 .up-checked { margin-left: auto; color: var(--muted-2); }
+.up-library-note { margin: 0 0 18px; align-items: flex-start; }
 .up-search { width: 100%; max-width: 320px; margin-bottom: 8px; }
 .btn.ghost.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 /* ---- choosing a sleeve ---- */

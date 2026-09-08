@@ -337,6 +337,27 @@ return r.rows.map((x) => ({ id: x.artist_id, name: x.name, imageUrl: x.image_url
 }
 /* A scan is the full picture of who you follow, so it replaces the stored set —
    but exclusions are the member's own choice and are carried across. */
+/* A scan that did not get all the way through is still worth keeping, but it
+   cannot say who has been unfollowed — so it adds and never removes. Run it
+   again and it picks up where it left off. */
+async function mergeTrackedArtists(memberId: string, artists: TrackedArtist[]): Promise<void> {
+if (!hasDb) return;
+await ready();
+const c = await db().connect();
+try {
+await c.query("begin");
+for (const a of artists) {
+await c.query(`insert into tracked_artists (member_id,artist_id,name,image_url,source,excluded) values ($1,$2,$3,$4,$5,false) on conflict (member_id,artist_id) do update set name=excluded.name, image_url=excluded.image_url`,
+[memberId, a.id, a.name, a.imageUrl, a.source]);
+}
+await c.query("commit");
+} catch (e) {
+await c.query("rollback");
+throw e;
+} finally {
+c.release();
+}
+}
 async function replaceTrackedArtists(memberId: string, artists: TrackedArtist[]): Promise<void> {
 if (!hasDb) return;
 await ready();
@@ -906,10 +927,16 @@ if (!artists.length) return bad("No artists to save");
 if (Array.isArray(b.playlistIds)) {
 await savePlaylistIds(auth.memberId, (b.playlistIds as unknown[]).map(String));
 }
+if (b.merge === true) {
+/* Partial: top up the list and leave everything else alone, releases
+   included — they still belong to artists that are still tracked. */
+await mergeTrackedArtists(auth.memberId, artists);
+} else {
 await replaceTrackedArtists(auth.memberId, artists);
 /* The artist list has been rebuilt, so anything on file could belong to
    somebody no longer followed. The scan that follows repopulates it. */
 await clearReleases(auth.memberId);
+}
 await markScanned(auth.memberId);
 return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
 }
