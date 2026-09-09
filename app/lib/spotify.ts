@@ -263,6 +263,16 @@ export type ArtistScan = {
   complete: boolean;
 };
 
+/* Reading a library and naming its artists come out of the same rate-limit
+   budget, so they share one pace. Spending it all on the reading is what left
+   nothing for the naming. */
+class Pace {
+  gap = 220;
+  ok() { this.gap = Math.max(200, Math.round(this.gap * 0.9)); }
+  slow() { this.gap = Math.min(4000, this.gap * 2); }
+  wait(signal?: AbortSignal) { return sleep(this.gap, signal); }
+}
+
 export async function fetchArtistsFromPlaylists(
   playlistIds: string[],
   onProgress?: (m: string) => void,
@@ -271,15 +281,35 @@ export async function fetchArtistsFromPlaylists(
 ): Promise<ArtistScan> {
   const token = await serverToken();
   const ids = new Set<string>();
+  const pace = new Pace();
+  let complete = true;
 
+  reading:
   for (let i = 0; i < playlistIds.length; i++) {
     const isLiked = playlistIds[i] === LIKED_SONGS_ID;
-    onProgress?.(`Reading ${isLiked ? "Liked Songs" : `playlist ${i + 1} of ${playlistIds.length}`}…`);
+    const what = isLiked ? "Liked Songs" : `playlist ${i + 1} of ${playlistIds.length}`;
+    let page = 0;
     let url: string | null = isLiked
       ? "/me/tracks?limit=50&fields=items(track(artists(id))),next,total"
       : `/playlists/${playlistIds[i]}/tracks?limit=100&fields=items(track(artists(id))),next`;
     while (url) {
-      const d: { items: ({ track?: { artists?: { id?: string }[] } } | null)[]; next?: string | null } = await api(token, url);
+      page += 1;
+      onProgress?.(`Reading ${what}… ${ids.size} artists so far`);
+      let d: { items: ({ track?: { artists?: { id?: string }[] } } | null)[]; next?: string | null };
+      for (let attempt = 0; ; attempt++) {
+        try {
+          d = await api(token, url, { signal });
+          pace.ok();
+          break;
+        } catch (err) {
+          if ((err as Error)?.name === "AbortError") throw err;
+          if (!(err instanceof RateLimited) || attempt >= 5) { complete = false; break reading; }
+          const wait = Math.min(err.retryAfter, 60);
+          onProgress?.(`Spotify asked us to wait ${wait}s — ${ids.size} artists found so far…`);
+          await sleep(wait * 1000, signal);
+          pace.slow();
+        }
+      }
       for (const item of d.items) {
         for (const a of item?.track?.artists ?? []) if (a.id) ids.add(a.id);
       }
@@ -287,8 +317,11 @@ export async function fetchArtistsFromPlaylists(
         const next = new URL(d.next);
         url = next.pathname.replace("/v1", "") + next.search;
       } else url = null;
+      /* Paging used to run flat out — thirty-nine requests as fast as the
+         network allowed — which spent the whole window before a single artist
+         had been named. */
+      if (url || i < playlistIds.length - 1) await pace.wait(signal);
     }
-    if (i < playlistIds.length - 1) await sleep(100);
   }
 
   /* Names and pictures come back 50 at a time, which for a big library is a lot
@@ -304,8 +337,6 @@ export async function fetchArtistsFromPlaylists(
     if (seen) artists.push(seen); else toName.push(id);
   }
 
-  let pause = 300;
-  let complete = true;
   outer:
   for (let i = 0; i < toName.length; i += 50) {
     onProgress?.(`Naming artists… ${Math.min(i + 50, toName.length)} of ${toName.length}`);
@@ -314,7 +345,7 @@ export async function fetchArtistsFromPlaylists(
       try {
         const d = await api<{ artists: (RawArtist | null)[] }>(token, `/artists?ids=${batch}`, { signal });
         artists.push(...d.artists.filter(Boolean).map((a) => toArtist(a as RawArtist)));
-        pause = Math.max(300, Math.round(pause * 0.8));
+        pace.ok();
         break;
       } catch (err) {
         if ((err as Error)?.name === "AbortError") throw err;
@@ -326,10 +357,10 @@ export async function fetchArtistsFromPlaylists(
         const wait = err instanceof RateLimited ? Math.min(err.retryAfter, 60) : 3;
         onProgress?.(`Spotify asked us to wait ${wait}s — ${artists.length} named so far…`);
         await sleep(wait * 1000, signal);
-        pause = Math.min(pause * 2, 3000);
+        pace.slow();
       }
     }
-    if (i + 50 < toName.length) await sleep(pause, signal);
+    if (i + 50 < toName.length) await pace.wait(signal);
   }
   return { artists, named: artists.length, total: all.length, complete };
 }

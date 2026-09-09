@@ -333,6 +333,13 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
       body: JSON.stringify({ artists, playlistIds, merge }),
     });
     if (!saved.ok) throw new Error(String(saved.data.error ?? "Couldn't save your artists"));
+    if (saved.data.keptExisting) {
+      setLibraryNote(
+        `That scan only came back with ${saved.data.found} artists against the ${saved.data.onFile} already on ` +
+        `file, so nothing was removed — a drop that big is usually a scan that went wrong rather than a library ` +
+        `that shrank. Run it again when Spotify is less busy and a full read will tidy up anyone you have unfollowed.`,
+      );
+    }
     const w = await load();
     /* The artist list has just been replaced, so this starts from nothing
        rather than from releases belonging to artists that may be gone. */

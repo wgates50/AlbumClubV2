@@ -340,16 +340,37 @@ return r.rows.map((x) => ({ id: x.artist_id, name: x.name, imageUrl: x.image_url
 /* A scan that did not get all the way through is still worth keeping, but it
    cannot say who has been unfollowed — so it adds and never removes. Run it
    again and it picks up where it left off. */
+/* A thousand-artist library was a thousand round trips; sent in chunks it is a
+   handful. Postgres caps a statement at 65535 parameters, so 500 rows of six
+   leaves plenty of room. */
+async function insertArtists(
+c: { query: (q: string, v?: unknown[]) => Promise<unknown> },
+memberId: string, artists: TrackedArtist[], excluded: (id: string) => boolean,
+): Promise<void> {
+const COLS = 6;
+for (let i = 0; i < artists.length; i += 500) {
+const chunk = artists.slice(i, i + 500);
+const values: unknown[] = [];
+const rows = chunk.map((a, n) => {
+values.push(memberId, a.id, a.name, a.imageUrl, a.source, excluded(a.id));
+return `(${Array.from({ length: COLS }, (_, k) => `$${n * COLS + k + 1}`).join(",")})`;
+});
+await c.query(
+`insert into tracked_artists (member_id,artist_id,name,image_url,source,excluded)
+ values ${rows.join(",")}
+ on conflict (member_id, artist_id) do update set name=excluded.name, image_url=excluded.image_url`,
+values,
+);
+}
+}
+
 async function mergeTrackedArtists(memberId: string, artists: TrackedArtist[]): Promise<void> {
 if (!hasDb) return;
 await ready();
 const c = await db().connect();
 try {
 await c.query("begin");
-for (const a of artists) {
-await c.query(`insert into tracked_artists (member_id,artist_id,name,image_url,source,excluded) values ($1,$2,$3,$4,$5,false) on conflict (member_id,artist_id) do update set name=excluded.name, image_url=excluded.image_url`,
-[memberId, a.id, a.name, a.imageUrl, a.source]);
-}
+await insertArtists(c, memberId, artists, () => false);
 await c.query("commit");
 } catch (e) {
 await c.query("rollback");
@@ -367,10 +388,7 @@ const c = await db().connect();
 try {
 await c.query("begin");
 await c.query(`delete from tracked_artists where member_id=$1`, [memberId]);
-for (const a of artists) {
-await c.query(`insert into tracked_artists (member_id,artist_id,name,image_url,source,excluded) values ($1,$2,$3,$4,$5,$6) on conflict (member_id,artist_id) do nothing`,
-[memberId, a.id, a.name, a.imageUrl, a.source, wasExcluded.has(a.id)]);
-}
+await insertArtists(c, memberId, artists, (id) => wasExcluded.has(id));
 await c.query("commit");
 } catch (e) {
 await c.query("rollback");
@@ -927,7 +945,15 @@ if (!artists.length) return bad("No artists to save");
 if (Array.isArray(b.playlistIds)) {
 await savePlaylistIds(auth.memberId, (b.playlistIds as unknown[]).map(String));
 }
-if (b.merge === true) {
+/* A scan that comes back with a fraction of what is on file is far more
+   likely to be a scan that went wrong than a library that shrank by that
+   much — and replacing on the strength of it is how 1904 artists became 62.
+   Keep both sets and say so; unfollowing really does get picked up, just on
+   a scan that manages to read the whole library. */
+const onFile = (await listTrackedArtists(auth.memberId)).length;
+const suspiciousShrink = onFile >= 50 && artists.length < onFile / 2;
+
+if (b.merge === true || suspiciousShrink) {
 /* Partial: top up the list and leave everything else alone, releases
    included — they still belong to artists that are still tracked. */
 await mergeTrackedArtists(auth.memberId, artists);
@@ -938,7 +964,10 @@ await replaceTrackedArtists(auth.memberId, artists);
 await clearReleases(auth.memberId);
 }
 await markScanned(auth.memberId);
-return J({ ok: true, artists: await listTrackedArtists(auth.memberId) });
+return J({
+ok: true, artists: await listTrackedArtists(auth.memberId),
+keptExisting: suspiciousShrink && b.merge !== true, found: artists.length, onFile,
+});
 }
 
 if (r === "shortlist") {
