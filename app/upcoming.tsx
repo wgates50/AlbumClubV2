@@ -132,19 +132,44 @@ async function call(url: string, init?: RequestInit) {
   return { ok: res.ok, data };
 }
 
-function Art({ url, seed, alt }: { url: string | null; seed: string; alt: string }) {
-  const [broken, setBroken] = useState(false);
-  const show = Boolean(url) && !broken;
+function Chevron({ open }: { open: boolean }) {
   return (
-    <div className="up-art" style={show ? undefined : { background: fallbackArt(seed) }}>
-      {show && <img src={url!} alt={alt} loading="lazy" onError={() => setBroken(true)} />}
+    <svg className={`up-chev${open ? " open" : ""}`} width="14" height="14" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+function Art({ url, seed, alt, size, onBroken }: {
+  url: string | null; seed: string; alt: string; size?: number; onBroken?: () => void;
+}) {
+  const [broken, setBroken] = useState(false);
+  /* A different record in the same slot deserves a fresh go at its sleeve. */
+  useEffect(() => { setBroken(false); }, [url]);
+  const show = Boolean(url) && !broken;
+  const box = size ? { width: size, height: size } : undefined;
+  return (
+    <div className="up-art" style={show ? box : { ...box, background: fallbackArt(seed) }}>
+      {show && (
+        <img src={url!} alt={alt} loading="lazy"
+          onError={() => { setBroken(true); onBroken?.(); }} />
+      )}
     </div>
   );
 }
 
+type Detail = {
+  state: "loading" | "done";
+  artUrl?: string | null; appleUrl?: string | null; releaseDate?: string | null;
+  trackCount?: number | null; genre?: string | null; tracks?: string[]; found?: boolean;
+};
+
 export default function Upcoming({ currentMonth, onPicked }: Props) {
   const [wire, setWire] = useState<Wire | null>(null);
   const [releases, setReleases] = useState<Release[]>([]);
+  const releasesRef = useRef<Release[]>([]);
+  releasesRef.current = releases;
   const [view, setView] = useState<View>("releases");
   const [resetting, setResetting] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -154,12 +179,66 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Record<string, Detail>>({});
+  const detailRef = useRef(detail);
+  detailRef.current = detail;
+  /* Sleeves that turned out not to exist, looked up one at a time rather than
+     fifty at once the moment a screenful of them fails. */
+  const artQueue = useRef<string[]>([]);
+  const artRunning = useRef(false);
   const [playlists, setPlaylists] = useState<Playlist[] | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const refreshed = useRef(false);
+
+  /* MusicBrainz hands out a cover-art URL for every release group, most of
+     which are 404s, and no tracklist at all. Apple has both. One call, kept
+     for the session, and a found sleeve is written back so it sticks. */
+  const enrich = useCallback(async (r: Release): Promise<Detail> => {
+    const held = detailRef.current[r.id];
+    if (held && held.state === "done") return held;
+    setDetail((d) => ({ ...d, [r.id]: { state: "loading" } }));
+    const res = await call(
+      `/api/search?enrich=${encodeURIComponent(r.title)}&artist=${encodeURIComponent(r.artist)}`);
+    const d = res.data as Record<string, unknown>;
+    const next: Detail = {
+      state: "done", found: Boolean(d.found),
+      artUrl: (d.artUrl as string) ?? null, appleUrl: (d.appleUrl as string) ?? null,
+      releaseDate: (d.releaseDate as string) ?? null,
+      trackCount: (d.trackCount as number) ?? null, genre: (d.genre as string) ?? null,
+      tracks: (d.tracks as string[]) ?? [],
+    };
+    setDetail((prev) => ({ ...prev, [r.id]: next }));
+    if (next.artUrl) {
+      setReleases((prev) => {
+        const updated = prev.map((x) => (x.id === r.id ? { ...x, artUrl: next.artUrl! } : x));
+        void call("/api/upcoming", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ releases: updated.map(dehydrate) }),
+        });
+        return updated;
+      });
+    }
+    return next;
+  }, []);
+
+  const queueArt = useCallback((r: Release) => {
+    if (detailRef.current[r.id] || artQueue.current.includes(r.id)) return;
+    artQueue.current.push(r.id);
+    if (artRunning.current) return;
+    artRunning.current = true;
+    void (async () => {
+      while (artQueue.current.length) {
+        const id = artQueue.current.shift()!;
+        const rel = releasesRef.current.find((x) => x.id === id);
+        if (rel) { await enrich(rel); await new Promise((s) => setTimeout(s, 350)); }
+      }
+      artRunning.current = false;
+    })();
+  }, [enrich]);
 
   const load = useCallback(async () => {
     const res = await call("/api/upcoming");
@@ -653,25 +732,75 @@ export default function Upcoming({ currentMonth, onPicked }: Props) {
               <p className="up-group-date">{label}</p>
               {items.map((r) => {
                 const already = shortlisted.has(`${r.title.toLowerCase()}::${r.artist.toLowerCase()}`);
+                const isOpen = openId === r.id;
+                const d = detail[r.id];
                 return (
-                  <article className="up-row" key={r.id}>
-                    <Art url={r.artUrl} seed={r.artist + r.title} alt={`${r.title} by ${r.artist}`} />
-                    <div className="up-row-body">
-                      <p className="up-title">{r.title}</p>
-                      <p className="up-artist">{r.artist}</p>
-                      <div className="up-meta">
-                        <span className="up-pill">{r.albumType}</span>
-                        {r.source === "musicbrainz" && <span className="up-pill soft">MusicBrainz</span>}
-                        <span className="up-when">{whenLabel(r)}</span>
-                      </div>
-                    </div>
-                    <div className="up-row-actions">
-                      <button className="btn sm" disabled={already} onClick={() => addToShortlist(r)}>
-                        {already ? "Shortlisted" : "Shortlist"}
+                  <div key={r.id}>
+                    <article className={`up-row${isOpen ? " open" : ""}`}>
+                      <button className="up-open" aria-expanded={isOpen}
+                        aria-label={`${isOpen ? "Hide" : "Show"} more about ${r.title}`}
+                        onClick={() => {
+                          const next = isOpen ? null : r.id;
+                          setOpenId(next);
+                          if (next) void enrich(r);
+                        }}>
+                        <Art url={r.artUrl} seed={r.artist + r.title}
+                          alt={`${r.title} by ${r.artist}`} onBroken={() => queueArt(r)} />
+                        <span className="up-row-body">
+                          <span className="up-title">{r.title}</span>
+                          <span className="up-artist">{r.artist}</span>
+                          <span className="up-meta">
+                            <span className="up-pill">{r.albumType}</span>
+                            {r.source === "musicbrainz" && <span className="up-pill soft">MusicBrainz</span>}
+                            <span className="up-when">{whenLabel(r)}</span>
+                          </span>
+                        </span>
+                        <Chevron open={isOpen} />
                       </button>
-                      {r.url && <a className="btn sm ghost" href={r.url} target="_blank" rel="noopener noreferrer">Open</a>}
-                    </div>
-                  </article>
+                      <div className="up-row-actions">
+                        <button className="btn sm" disabled={already} onClick={() => addToShortlist(r)}>
+                          {already ? "Shortlisted" : "Shortlist"}
+                        </button>
+                        {r.url && <a className="btn sm ghost" href={r.url} target="_blank" rel="noopener noreferrer">Open</a>}
+                      </div>
+                    </article>
+
+                    {isOpen && (
+                      <div className="up-detail">
+                        <dl className="up-facts">
+                          <div><dt>Out</dt><dd>{dateLabel(r)}</dd></div>
+                          <div><dt>Type</dt><dd className="cap">{r.albumType}</dd></div>
+                          {d?.genre && <div><dt>Genre</dt><dd>{d.genre}</dd></div>}
+                          {(d?.trackCount ?? d?.tracks?.length) ? (
+                            <div><dt>Tracks</dt><dd>{d.trackCount ?? d.tracks!.length}</dd></div>
+                          ) : null}
+                          <div><dt>Found via</dt><dd>{r.source === "musicbrainz" ? "MusicBrainz" : "Spotify"}</dd></div>
+                        </dl>
+
+                        {d?.state === "loading" && <p className="muted">Looking it up…</p>}
+                        {d?.state === "done" && (d.tracks?.length
+                          ? (
+                            <ol className="up-tracks">
+                              {d.tracks.map((t, i) => <li key={`${t}-${i}`}>{t}</li>)}
+                            </ol>
+                          )
+                          : (
+                            <p className="muted">
+                              {r.date.getTime() > Date.now()
+                                ? "No tracklist yet — it usually appears closer to release."
+                                : "No tracklist found for this one."}
+                            </p>
+                          ))}
+
+                        <div className="flex gap8 wrap mt14">
+                          {r.url && <a className="btn sm ghost" href={r.url} target="_blank" rel="noopener noreferrer">
+                            Open on {r.source === "musicbrainz" ? "MusicBrainz" : "Spotify"}
+                          </a>}
+                          {d?.appleUrl && <a className="btn sm ghost" href={d.appleUrl} target="_blank" rel="noopener noreferrer">Apple Music</a>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </section>

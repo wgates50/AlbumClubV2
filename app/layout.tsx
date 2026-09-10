@@ -1248,6 +1248,30 @@ label.field > span {
 .up-when { font-size: 12px; color: var(--muted); }
 .up-row-actions { display: flex; gap: 6px; flex: none; }
 
+/* The row is a button now, so every colour in it is stated rather than
+   inherited — a button falls back to the UA's black otherwise. */
+.up-open { display: flex; align-items: center; gap: 16px; flex: 1; min-width: 0;
+  background: none; border: 0; padding: 0; margin: 0; text-align: left; cursor: pointer;
+  color: var(--text-dim); font-family: var(--font-ui); font-weight: 300; }
+.up-open:hover { color: var(--text); }
+.up-open .up-title { color: var(--text); }
+.up-open .up-row-body { display: flex; flex-direction: column; }
+.up-chev { flex: none; color: var(--muted-2); transition: transform 0.18s var(--ease); }
+.up-chev.open { transform: rotate(180deg); color: var(--accent); }
+.up-row.open { border-bottom-color: transparent; }
+
+.up-detail { padding: 2px 0 22px 68px; border-bottom: 1px solid var(--line-soft);
+  animation: rise 0.3s var(--ease) both; }
+.up-facts { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 0 0 16px; }
+.up-facts div { display: flex; flex-direction: column; gap: 2px; }
+.up-facts dt { font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted-2); }
+.up-facts dd { margin: 0; font-size: 13.5px; color: var(--text-dim); }
+.up-facts dd.cap::first-letter { text-transform: uppercase; }
+.up-tracks { margin: 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+.up-tracks li { font-size: 13.5px; color: var(--text-dim); margin-bottom: 5px;
+  break-inside: avoid; padding-left: 2px; }
+.up-tracks li::marker { color: var(--muted-2); font-size: 11px; }
+
 .up-artists { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 24px; }
 .up-artist-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
 .up-artist-row .up-art { width: 36px; height: 36px; border-radius: 50%; }
@@ -1497,6 +1521,8 @@ input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
   .up-actions { min-width: 0; align-items: center; flex-wrap: wrap; }
   .up-row { flex-wrap: wrap; }
   .up-row-actions { width: 100%; padding-left: 68px; }
+  .up-detail { padding-left: 0; }
+  .up-tracks { columns: 1; }
   .up-artists { grid-template-columns: minmax(0, 1fr); }
   .up-artist-row { min-width: 0; }
   .adm-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 8px; }

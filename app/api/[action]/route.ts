@@ -689,7 +689,55 @@ const s = await readSession();
 if (!s.authed) return bad("Not signed in", 401);
 const q = req.nextUrl.searchParams.get("q");
 const tracksFor = req.nextUrl.searchParams.get("tracks");
+const enrich = req.nextUrl.searchParams.get("enrich");
+const enrichArtist = req.nextUrl.searchParams.get("artist");
 try {
+/* One record, looked up properly: MusicBrainz gives a cover-art URL that is
+   a 404 for most release groups, so a release found that way arrives with no
+   sleeve and no tracklist. This finds it in Apple's catalogue — same "the
+   artist has to agree" rule as everywhere else — and returns both at once. */
+if (enrich) {
+const artist = enrichArtist ?? "";
+const title = enrich;
+if (!artist || !title) return bad("Needs an artist and a title");
+const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const u = `https://itunes.apple.com/search?term=${encodeURIComponent(`${artist} ${title}`)}&entity=album&limit=8&country=GB`;
+const res = await fetch(u, { signal: AbortSignal.timeout(9000), cache: "no-store" });
+if (!res.ok) return J({ ok: true, found: false });
+const d = (await res.json()) as { results?: Record<string, unknown>[] };
+const want = norm(artist);
+const hit = (d.results ?? []).find((x) => norm(String(x.artistName ?? "")) === want)
+?? (d.results ?? []).find((x) => {
+const n = norm(String(x.artistName ?? ""));
+return n.includes(want) || want.includes(n);
+});
+if (!hit) return J({ ok: true, found: false });
+let tracks: string[] = [];
+if (hit.collectionId) {
+const tu = `https://itunes.apple.com/lookup?id=${encodeURIComponent(String(hit.collectionId))}&entity=song&limit=200&country=GB`;
+const tr = await fetch(tu, { signal: AbortSignal.timeout(9000), cache: "no-store" });
+if (tr.ok) {
+const td = (await tr.json()) as { results?: Record<string, unknown>[] };
+tracks = (td.results ?? [])
+.filter((t) => t.wrapperType === "track" && t.trackName)
+.sort((a, b) =>
+(Number(a.discNumber) || 1) - (Number(b.discNumber) || 1) ||
+(Number(a.trackNumber) || 0) - (Number(b.trackNumber) || 0))
+.map((t) => String(t.trackName));
+}
+}
+return J({
+ok: true, found: true,
+artUrl: hit.artworkUrl100
+? String(hit.artworkUrl100).replace(/\/\d+x\d+bb\.(jpg|png)$/, "/600x600bb.$1")
+: null,
+appleUrl: hit.collectionViewUrl ? String(hit.collectionViewUrl).split("?")[0] : null,
+releaseDate: hit.releaseDate ? String(hit.releaseDate).slice(0, 10) : null,
+trackCount: hit.trackCount ? Number(hit.trackCount) : null,
+genre: hit.primaryGenreName ? String(hit.primaryGenreName) : null,
+tracks,
+});
+}
 if (tracksFor) {
 const u = `https://itunes.apple.com/lookup?id=${encodeURIComponent(tracksFor)}&entity=song&limit=200&country=GB`;
 const res = await fetch(u, { signal: AbortSignal.timeout(9000), cache: "no-store" });
